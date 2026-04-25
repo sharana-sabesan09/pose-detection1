@@ -18,3 +18,12 @@ android/app/build/
 
 # Build artifacts
 *.jsbundle
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.venv/
