@@ -1,0 +1,100 @@
+{
+  "sessionId": "2026-04-25T16:55:40.197Z",
+  "startedAtMs": 1777136113362,
+  "endedAtMs": 1777136140171,
+  "durationMs": 26809,
+  "exercise": "squat",
+  "numReps": 2,
+  "summary": {
+    "exercise": "squat",
+    "reps": [
+      {
+        "repId": 1,
+        "side": "left",
+        "timing": {
+          "startFrame": 0,
+          "bottomFrame": 740,
+          "endFrame": 913,
+          "durationMs": 16163
+        },
+        "features": {
+          "kneeFlexionDeg": 48.9495997581011,
+          "romRatio": 0.4079133313175092,
+          "fppaPeak": 48.9495997581011,
+          "fppaAtDepth": 7.915881496347538,
+          "trunkLeanPeak": 31.61920759460618,
+          "trunkFlexPeak": 77.69946556748991,
+          "pelvicDropPeak": 22.612454918485668,
+          "pelvicShiftPeak": 0.4499601423740387,
+          "hipAdductionPeak": 179.9510580403914,
+          "kneeOffsetPeak": 0.8121361153020328,
+          "swayNorm": 0.053656791456497044,
+          "smoothness": 109.64483635193592
+        },
+        "errors": {
+          "kneeValgus": true,
+          "trunkLean": true,
+          "trunkFlex": true,
+          "pelvicDrop": true,
+          "pelvicShift": true,
+          "hipAdduction": true,
+          "kneeOverFoot": true,
+          "balance": true
+        },
+        "score": {
+          "totalErrors": 8,
+          "classification": "poor"
+        },
+        "confidence": 0.9022090381444762
+      },
+      {
+        "repId": 2,
+        "side": "left",
+        "timing": {
+          "startFrame": 1251,
+          "bottomFrame": 1289,
+          "endFrame": 1489,
+          "durationMs": 4287
+        },
+        "features": {
+          "kneeFlexionDeg": 55.723938946345825,
+          "romRatio": 0.4643661578862152,
+          "fppaPeak": 55.723938946345825,
+          "fppaAtDepth": 32.64237508536587,
+          "trunkLeanPeak": 13.696714189591388,
+          "trunkFlexPeak": 66.20713919538179,
+          "pelvicDropPeak": 9.624404215206553,
+          "pelvicShiftPeak": 0.06584396958351135,
+          "hipAdductionPeak": 179.99124505990656,
+          "kneeOffsetPeak": 1.1000131405237197,
+          "swayNorm": 0.024563877856042783,
+          "smoothness": 152.70780639962234
+        },
+        "errors": {
+          "kneeValgus": true,
+          "trunkLean": true,
+          "trunkFlex": true,
+          "pelvicDrop": true,
+          "pelvicShift": false,
+          "hipAdduction": true,
+          "kneeOverFoot": true,
+          "balance": false
+        },
+        "score": {
+          "totalErrors": 6,
+          "classification": "poor"
+        },
+        "confidence": 0.9062841268180971
+      }
+    ],
+    "summary": {
+      "numReps": 2,
+      "avgDepth": 52.33676935222346,
+      "minDepth": 48.9495997581011,
+      "avgFppa": 52.33676935222346,
+      "maxFppa": 55.723938946345825,
+      "consistency": 0.935281263325084,
+      "overallRating": "poor"
+    }
+  }
+}
