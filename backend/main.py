@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from rag.loader import load_clinical_guidelines
@@ -6,10 +8,15 @@ import routers.sessions as sessions
 import routers.reports as reports
 import routers.exports as exports
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    load_clinical_guidelines()
+    # Load in a thread so /health responds immediately during cold boot.
+    # Agents degrade gracefully (LLM-only) until the index is ready.
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, load_clinical_guidelines)
     yield
 
 

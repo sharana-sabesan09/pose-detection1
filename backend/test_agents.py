@@ -189,14 +189,20 @@ async def run_all(engine, session_data: dict, label: str):
         patient_id = "test-patient-01"
         session_id = str(uuid.uuid4())
 
-        patient = Patient(id=patient_id, created_at=datetime.utcnow())
+        # Both sessions share the same patient — only insert once.
+        from sqlalchemy import select as _select
+        existing_patient = (await db.execute(
+            _select(Patient).where(Patient.id == patient_id)
+        )).scalars().first()
+        if not existing_patient:
+            db.add(Patient(id=patient_id, created_at=datetime.utcnow()))
+
         pt_session = Session(
             id=session_id,
             patient_id=patient_id,
             pt_plan="Squat rehabilitation program",
             started_at=datetime.utcnow(),
         )
-        db.add(patient)
         db.add(pt_session)
 
         reps = session_data["summary"]["reps"]

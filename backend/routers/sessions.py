@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,7 +9,7 @@ from db.models import Session, PoseFrame, ExerciseSession, RepAnalysis
 from schemas.session import IntakeInput, ReporterOutput
 from schemas.report import SessionStartRequest, SessionStartResponse, FrameRequest
 from schemas.exercise import ExerciseSessionResult, ExerciseSessionResponse
-from agents.orchestrator import run_session_pipeline
+from agents.orchestrator import run_session_pipeline, run_exercise_pipeline
 from routers.auth import require_jwt
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -152,12 +153,20 @@ async def store_exercise_result(
             confidence=rep.confidence,
         ))
 
+    linked_session_id = linked_session.id  # capture before commit expires the ORM object
     await db.commit()
+
+    # Fire the exercise pipeline as a background task — returns 201 immediately,
+    # agents run concurrently without blocking the mobile app.
+    asyncio.create_task(
+        run_exercise_pipeline(body, linked_session_id, body.patientId)
+    )
+
     return ExerciseSessionResponse(
         id=exercise_session.id,
         sessionId=exercise_session.mobile_session_id,
         exercise=exercise_session.exercise,
         numReps=exercise_session.num_reps,
         overallRating=body.summary.summary.overallRating,
-        linkedSessionId=linked_session.id,
+        linkedSessionId=linked_session_id,
     )

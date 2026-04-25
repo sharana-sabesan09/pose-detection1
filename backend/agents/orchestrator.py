@@ -10,6 +10,7 @@ from agents.progress import run_progress
 from utils.audit import write_audit
 from sqlalchemy import select, func
 from db.models import Session
+from schemas.exercise import ExerciseSessionResult
 
 logger = logging.getLogger(__name__)
 
@@ -88,4 +89,54 @@ async def run_session_pipeline(
     if failed_agents:
         results["failed_agents"] = failed_agents
 
+    return results
+
+
+async def run_exercise_pipeline(
+    result: ExerciseSessionResult,
+    session_id: str,
+    patient_id: str | None,
+) -> dict:
+    """
+    Exercise session pipeline — runs the exercise_reporter directly from mobile data.
+
+    Creates its own db session because it runs as an asyncio background task
+    after the HTTP 201 response has already been returned to the mobile app.
+    Only calls progress_agent if the patient has 3+ linked sessions.
+    """
+    from agents.exercise_reporter import run_exercise_reporter
+    from db.session import AsyncSessionLocal
+
+    pid = patient_id or "anonymous"
+    results: dict = {}
+    failed_agents: list[str] = []
+
+    async with AsyncSessionLocal() as db:
+        try:
+            reporter_output = await run_exercise_reporter(result, session_id, pid, db)
+            results["exercise_reporter"] = reporter_output.model_dump()
+        except Exception as e:
+            logger.error("exercise_reporter agent failed: %s", e)
+            failed_agents.append("exercise_reporter")
+            await write_audit("orchestrator", "pipeline_error", pid, "exercise_reporter", db)
+            await db.commit()
+            return {"failed_agents": failed_agents}
+
+        if patient_id:
+            try:
+                count_result = await db.execute(
+                    select(func.count(Session.id)).where(Session.patient_id == patient_id)
+                )
+                if (count_result.scalar() or 0) >= 3:
+                    progress_output = await run_progress(patient_id, db)
+                    results["progress"] = progress_output.model_dump()
+            except Exception as e:
+                logger.error("progress agent failed (exercise pipeline): %s", e)
+                failed_agents.append("progress")
+                await write_audit("orchestrator", "pipeline_error", pid, "progress", db)
+
+        await db.commit()
+
+    if failed_agents:
+        results["failed_agents"] = failed_agents
     return results
