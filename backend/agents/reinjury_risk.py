@@ -92,7 +92,7 @@ Output only valid JSON."""
             created_at=datetime.utcnow(),
         )
         db.add(score_row)
-    await db.commit()
+    await db.flush()
 
     await write_audit("reinjury_risk_agent", "assess_reinjury_risk", patient_id, "reinjury_risk_score", db)
     return output

@@ -6,7 +6,7 @@ from config import settings
 from schemas.report import TokenRequest, TokenResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-_bearer = HTTPBearer()
+_bearer = HTTPBearer(auto_error=False)  # auto_error=False lets DEV_MODE skip the header entirely
 
 _ALGORITHM = "HS256"
 _EXPIRE_HOURS = 24
@@ -17,7 +17,11 @@ def _create_token(data: dict) -> str:
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=_ALGORITHM)
 
 
-def require_jwt(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -> dict:
+def require_jwt(credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> dict:
+    if settings.DEV_MODE:
+        return {"user_id": "dev", "role": "admin"}
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
     try:
         payload = jwt.decode(credentials.credentials, settings.JWT_SECRET, algorithms=[_ALGORITHM])
         return payload

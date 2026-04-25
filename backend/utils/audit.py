@@ -20,4 +20,4 @@ async def write_audit(
         timestamp=datetime.utcnow(),
     )
     db.add(entry)
-    await db.commit()
+    # No commit here — caller owns the transaction.
