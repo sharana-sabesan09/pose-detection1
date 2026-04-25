@@ -1,85 +1,100 @@
 /**
- * src/engine/exercise/repDetector.ts — REP STATE MACHINE
+ * src/engine/exercise/repDetector.ts — POST-HOC REP DETECTION FROM HIP Y TRAJECTORY
  *
- * STATES:
- *   IDLE     — user is standing or hasn't started moving down yet
- *   DESCENT  — knee flexion is increasing (going down)
- *   ASCENT   — knee flexion is decreasing (coming up)
+ * Called once at the end of a recording on the full FrameFeatures buffer.
  *
- * EVENTS produced on transitions:
- *   repStart — IDLE   → DESCENT
- *   bottom   — DESCENT → ASCENT
- *   repEnd   — ASCENT → IDLE
+ * HOW REPS ARE DEFINED:
+ *   midHipY increases as the person descends (screen-y grows downward).
+ *   A rep is the cycle: stand → squat → stand.
  *
- * HYSTERESIS:
- *   - Velocity must exceed a deadband to switch direction (avoids flicker
- *     at the bottom of the rep where velocity oscillates near 0).
- *   - A descent only starts once knee flexion crosses DESCENT_TRIGGER_DEG.
- *   - A rep is rejected (no repStart event) if its peak knee flex doesn't
- *     reach MIN_REP_DEPTH_DEG by the time the user comes back up.
- *     (That logic lives in the aggregator / pipeline — the state machine
- *     itself is dumb on purpose.)
+ *   Instead of computing a global min/max range, we track a rolling baseline
+ *   (where "standing" is right now) and trigger on amplitude relative to it:
+ *
+ *     Enter squat: y - baseline >= AMP_THRESH  AND  dy > 0  (descending)
+ *     Exit squat:  baseline - y <= AMP_THRESH * 0.3  AND  dy < 0  (ascending back)
+ *
+ *   Baseline updates only while standing, so it adapts to camera drift or the
+ *   person shifting height without being poisoned by squat frames.
  */
 
-import { FrameFeatures, RepState, RepStateEvents, REP_THRESHOLDS } from './types';
+import { FrameFeatures } from './types';
 
-export interface UpdateRepStateOutput {
-  state:  RepState;
-  events: RepStateEvents;
+export interface RepRange {
+  startIdx:  number;   // first frame of descent
+  bottomIdx: number;   // frame of peak hip descent
+  endIdx:    number;   // frame person returned to standing
 }
 
-/**
- * updateRepState — pure transition function. Given the current frame, the
- * previous frame, and the current state, returns the next state plus any
- * events that fired on this frame.
- *
- * Pass `prev = undefined` for the first frame ever (it stays IDLE, no events).
- */
-export function updateRepState(
-  current: FrameFeatures,
-  prev: FrameFeatures | undefined,
-  state: RepState,
-): UpdateRepStateOutput {
-  const events: RepStateEvents = {};
-  if (!prev) return { state, events };
+export const HIP_DETECT = {
+  /** Exponential smoothing factor for the standing baseline. Small = slow adapt. */
+  BASELINE_ALPHA: 0.02,
 
-  const k  = current.kneeFlexion;
-  const v  = current.velocityKneeFlex;
-  const dead = REP_THRESHOLDS.VELOCITY_DEAD_DEG_S;
+  /** Minimum hip descent relative to baseline to trigger a squat (screen-fraction). */
+  AMP_THRESH: 0.01,
 
-  switch (state) {
-    case 'IDLE': {
-      // Need clear downward motion AND enough flexion to qualify as a descent.
-      if (v > dead && k > REP_THRESHOLDS.DESCENT_TRIGGER_DEG) {
-        events.repStart = true;
-        return { state: 'DESCENT', events };
+  /** Rolling-mean window (frames) applied before thresholding. */
+  SMOOTH_WINDOW: 7,
+
+  /** Minimum frames a squat phase must span to count as a rep. */
+  MIN_REP_FRAMES: 8,
+} as const;
+
+function rollingMean(arr: number[], window: number): number[] {
+  const half = Math.floor(window / 2);
+  return arr.map((_, i) => {
+    const lo = Math.max(0, i - half);
+    const hi = Math.min(arr.length, lo + window);
+    let s = 0;
+    for (let j = lo; j < hi; j++) s += arr[j];
+    return s / (hi - lo);
+  });
+}
+
+export function detectRepRanges(frames: FrameFeatures[]): RepRange[] {
+  if (frames.length < 20) return [];
+
+  const smoothed = rollingMean(frames.map(f => f.midHipY), HIP_DETECT.SMOOTH_WINDOW);
+
+  let baseline = smoothed[0];
+  const reps: RepRange[] = [];
+  let inSquat   = false;
+  let startIdx  = 0;
+  let bottomIdx = 0;
+  let bottomY   = -Infinity;
+
+  for (let i = 0; i < smoothed.length; i++) {
+    const y  = smoothed[i];
+    const dy = i > 0 ? smoothed[i] - smoothed[i - 1] : 0;
+
+    if (!inSquat) {
+      // Baseline only updates while standing.
+      baseline = baseline * (1 - HIP_DETECT.BASELINE_ALPHA) + y * HIP_DETECT.BASELINE_ALPHA;
+
+      // Enter squat: hip has descended past the amplitude threshold.
+      // dy > 0 guard is omitted — with a slow-tracking baseline, the amplitude
+      // threshold is only reached near the squat depth, not on trivial movements.
+      if (y - baseline >= HIP_DETECT.AMP_THRESH) {
+        inSquat   = true;
+        startIdx  = i;
+        bottomIdx = i;
+        bottomY   = y;
       }
-      return { state, events };
-    }
+    } else {
+      // Track deepest frame.
+      if (y > bottomY) { bottomY = y; bottomIdx = i; }
 
-    case 'DESCENT': {
-      // Switch to ascent on velocity sign-flip past the deadband.
-      if (v < -dead) {
-        events.bottom = true;
-        return { state: 'ASCENT', events };
+      // Exit squat: hip has returned to within 30% of AMP_THRESH above baseline.
+      // Using (y - baseline) not (baseline - y): when squatting y > baseline, so
+      // (baseline - y) is negative and would always satisfy <= threshold.
+      if (y - baseline <= HIP_DETECT.AMP_THRESH * 0.3 && dy < 0) {
+        if (i - startIdx >= HIP_DETECT.MIN_REP_FRAMES) {
+          reps.push({ startIdx, bottomIdx, endIdx: i });
+        }
+        inSquat = false;
+        bottomY = -Infinity;
       }
-      return { state, events };
     }
-
-    case 'ASCENT': {
-      // Once the user is back near standing, the rep is over — we're already
-      // in ASCENT so the bottom has been observed. Velocity is intentionally
-      // NOT part of this check: a real squat usually has nonzero ascent
-      // velocity at the moment the knees fully extend, and our synthetic
-      // data does too.
-      if (k < REP_THRESHOLDS.STAND_KNEE_DEG) {
-        events.repEnd = true;
-        return { state: 'IDLE', events };
-      }
-      return { state, events };
-    }
-
-    default:
-      return { state: 'IDLE', events };
   }
+
+  return reps;
 }

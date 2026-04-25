@@ -47,50 +47,86 @@ function safeSegment(s) {
 }
 
 function exportsMiddleware(req, res, next) {
-  if (req.url !== '/exports/session') return next();
-  if (req.method !== 'POST') {
-    res.statusCode = 405;
-    res.setHeader('Allow', 'POST');
-    res.end('Method Not Allowed');
+  // Connectivity check — curl or browser: GET http://<laptop-ip>:8081/exports/ping
+  if (req.url === '/exports/ping' && req.method === 'GET') {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: true, exportRoot: EXPORT_ROOT }));
     return;
   }
 
-  readJsonBody(req)
-    .then(body => {
-      const safeId = safeSegment(body.session_id);
-      const stamp  = new Date().toISOString().replace(/[:.]/g, '-');
-      const outDir = path.join(EXPORT_ROOT, `${stamp}_${safeId}`);
-      fs.mkdirSync(outDir, { recursive: true });
+  // ── POST /exports/session — small payload: session.json + reps.csv + reps.jsonl ──
+  if (req.url === '/exports/session') {
+    if (req.method !== 'POST') { res.statusCode = 405; res.end('Method Not Allowed'); return; }
 
-      const written = [];
-      const writeIf = (name, contents) => {
-        if (typeof contents !== 'string' || contents.length === 0) return;
-        const p = path.join(outDir, name);
-        fs.writeFileSync(p, contents, 'utf8');
-        written.push(p);
-      };
+    readJsonBody(req)
+      .then(body => {
+        const safeId = safeSegment(body.session_id);
+        const stamp  = new Date().toISOString().replace(/[:.]/g, '-');
+        const outDir = path.join(EXPORT_ROOT, `${stamp}_${safeId}`);
+        fs.mkdirSync(outDir, { recursive: true });
 
-      writeIf('session.json', body.summary_json);
-      writeIf('reps.csv',     body.reps_csv);
-      writeIf('reps.jsonl',   body.reps_jsonl);
-      writeIf('frames.csv',   body.frames_csv);
+        const written = [];
+        const writeIf = (name, contents) => {
+          if (typeof contents !== 'string') return; // skip undefined/null, but write empty strings
+          const p = path.join(outDir, name);
+          fs.writeFileSync(p, contents, 'utf8');
+          written.push(p);
+        };
 
-      console.log(`[metro/exports] ${written.length} file(s) → ${outDir}`);
+        writeIf('session.json', body.summary_json);
+        writeIf('reps.csv',     body.reps_csv);
+        writeIf('reps.jsonl',   body.reps_jsonl);
 
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({
-        session_id: safeId,
-        written_to: outDir,
-        files:      written,
-      }));
-    })
-    .catch(err => {
-      console.warn('[metro/exports] failed:', err.message);
-      res.statusCode = 400;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: err.message }));
-    });
+        console.log(`[metro/exports] schema saved (${written.length} files) → ${outDir}`);
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ session_id: safeId, written_to: outDir, files: written }));
+      })
+      .catch(err => {
+        console.error('[metro/exports/session] error:', err.message);
+        res.statusCode = 400;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: err.message }));
+      });
+    return;
+  }
+
+  // ── POST /exports/frames — large payload: frames.csv only, appended to existing dir ──
+  // Called as a separate fire-and-forget request so it can't abort the main export.
+  if (req.url === '/exports/frames') {
+    if (req.method !== 'POST') { res.statusCode = 405; res.end('Method Not Allowed'); return; }
+
+    readJsonBody(req)
+      .then(body => {
+        const outDir = body.out_dir; // path returned by /exports/session
+        if (!outDir || !fs.existsSync(outDir)) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: 'export dir not found — send /exports/session first' }));
+          return;
+        }
+
+        const p = path.join(outDir, 'frames.csv');
+        if (typeof body.frames_csv === 'string' && body.frames_csv.length > 0) {
+          fs.writeFileSync(p, body.frames_csv, 'utf8');
+          console.log(`[metro/exports] frames.csv saved → ${p}`);
+        }
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ written: p }));
+      })
+      .catch(err => {
+        console.error('[metro/exports/frames] error:', err.message);
+        res.statusCode = 400;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: err.message }));
+      });
+    return;
+  }
+
+  next();
 }
 
 const config = {

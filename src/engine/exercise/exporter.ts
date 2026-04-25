@@ -144,27 +144,28 @@ async function getBackendToken(baseUrl: string, timeoutMs: number): Promise<stri
  *
  * Pass null/empty baseUrl to disable. Trailing slashes on baseUrl are fine.
  */
+/**
+ * Step 1 — POST session.json + reps.csv + reps.jsonl (small, fast).
+ * Returns the out_dir path that step 2 needs.
+ */
 export async function postSessionToBackend(
   baseUrl: string | null | undefined,
   payload: SessionExportPayload,
-  timeoutMs = 8000,
+  timeoutMs = 15000,
 ): Promise<BackendExportResult> {
   if (!baseUrl) return { ok: false, error: 'no backend URL configured' };
 
-  const url = baseUrl.replace(/\/+$/, '') + '/sessions/exercise-result';
+  const url = baseUrl.replace(/\/+$/, '') + '/exports/session';
 
-  const body = {
-    sessionId: payload.sessionId,
+  const summaryJson = JSON.stringify({
+    sessionId:   payload.sessionId,
     startedAtMs: payload.startedAtMs,
-    endedAtMs: payload.endedAtMs,
-    durationMs: payload.durationMs,
-    exercise: payload.exercise,
-    numReps: payload.numReps,
-    summary: payload.summary,
-    patientId: payload.patientId ?? null,
-    repsCsv: payload.repsCsv,
-    frameFeaturesCsv: payload.frameFeaturesCsv,
-  };
+    endedAtMs:   payload.endedAtMs,
+    durationMs:  payload.durationMs,
+    exercise:    payload.exercise,
+    numReps:     payload.numReps,
+    summary:     payload.summary,
+  });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -172,28 +173,55 @@ export async function postSessionToBackend(
   try {
     const token = await getBackendToken(baseUrl, timeoutMs);
     const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        session_id:   payload.sessionId,
+        summary_json: summaryJson,
+        reps_csv:     payload.repsCsv,
+        reps_jsonl:   payload.repsJsonl,
+      }),
       signal: controller.signal,
     });
     clearTimeout(timer);
-    if (!res.ok) {
-      if (res.status === 401 || res.status === 403) {
-        cachedAccessToken = null;
-      }
-      return { ok: false, status: res.status, error: `HTTP ${res.status}` };
-    }
+    if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     const data = await res.json().catch(() => ({}));
-    return {
-      ok:        true,
-      status:    res.status,
-      id: data?.id,
-      linkedSessionId: data?.linkedSessionId,
-    };
+    return { ok: true, status: res.status, writtenTo: data?.written_to, files: data?.files };
+  } catch (e) {
+    clearTimeout(timer);
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * Step 2 — POST frames.csv separately to /exports/frames.
+ * Fire-and-forget from the caller — a failure here doesn't abort the export.
+ * out_dir is the path returned by postSessionToBackend.
+ */
+export async function postFramesToBackend(
+  baseUrl: string | null | undefined,
+  sessionId: string,
+  outDir: string,
+  framesCsv: string,
+  timeoutMs = 60000,
+): Promise<BackendExportResult> {
+  if (!baseUrl) return { ok: false, error: 'no backend URL configured' };
+
+  const url = baseUrl.replace(/\/+$/, '') + '/exports/frames';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ session_id: sessionId, out_dir: outDir, frames_csv: framesCsv }),
+      signal:  controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    const data = await res.json().catch(() => ({}));
+    return { ok: true, status: res.status, writtenTo: data?.written };
   } catch (e) {
     clearTimeout(timer);
     cachedAccessToken = null;
