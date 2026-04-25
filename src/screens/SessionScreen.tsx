@@ -35,14 +35,15 @@ import {
   saveAnalysis,
   RecordedFrame,
 } from '../engine/analyzeRecording';
-import { buildLandmarkCsv, buildRepsCsv } from '../engine/csvLogger';
 import { ExercisePipeline } from '../engine/exercise/pipeline';
 import {
   buildExportPayload,
+  buildSessionJson,
+  postFramesToBackend,
   postSessionToBackend,
   shareSessionViaSheet,
 } from '../engine/exercise/exporter';
-import { RepFeatures } from '../engine/exercise/types';
+import { buildLandmarkCsv } from '../engine/csvLogger';
 import { BACKEND_URL } from '../constants';
 import ScoreDashboard from '../components/ScoreDashboard';
 import { POSE_HTML } from '../engine/poseHtml';
@@ -88,12 +89,7 @@ export default function SessionScreen() {
   const recordStateRef  = useRef(recordState);
   // Exercise pipeline: instantiated fresh on each recording start so reps
   // detected in the previous run don't bleed into the next.
-  const pipelineRef     = useRef<ExercisePipeline | null>(null);
-  // Per-rep schemas captured the moment each rep ends (pipe.onFrame returns
-  // the finalized RepFeatures). These are also available via pipe.finalize()
-  // at the end, but capturing them live lets us log/stream each rep as it
-  // happens — matching the "create json schema when rep is detected" spec.
-  const repsRef         = useRef<RepFeatures[]>([]);
+  const pipelineRef        = useRef<ExercisePipeline | null>(null);
   const recordStartedAtRef = useRef<number>(0);
 
   useEffect(() => { recordStateRef.current = recordState; }, [recordState]);
@@ -151,19 +147,9 @@ export default function SessionScreen() {
       if (recordStateRef.current === 'recording') {
         const t = Date.now();
         recordingFrames.current.push({ t, pose });
-        // pipe.onFrame returns the finalized RepFeatures the moment a rep
-        // ends — capture each rep's schema right then so the user gets a
-        // per-rep JSON object, not just one final session blob.
-        const finishedRep = pipelineRef.current?.onFrame(t, pose) ?? null;
-        if (finishedRep) {
-          repsRef.current.push(finishedRep);
-          console.log(
-            `[SessionScreen] rep ${finishedRep.repId} (${finishedRep.side}) finished — ` +
-            `depth ${finishedRep.features.kneeFlexionDeg.toFixed(1)}° / ` +
-            `${finishedRep.score.classification} / ${finishedRep.score.totalErrors} err`,
-          );
-          console.log('[SessionScreen] rep schema:', JSON.stringify(finishedRep));
-        }
+        // Rep detection is post-hoc — onFrame only collects frames.
+        // Reps are detected in finalize() after the recording ends.
+        pipelineRef.current?.onFrame(t, pose);
       }
 
       detectorsRef.current.update(pose, mode);
@@ -177,7 +163,6 @@ export default function SessionScreen() {
   // ── Start recording ───────────────────────────────────────────────────────
   const startRecording = useCallback(() => {
     recordingFrames.current = [];
-    repsRef.current = [];
     recordStartedAtRef.current = Date.now();
     pipelineRef.current = new ExercisePipeline('squat');
     setRecordState('recording');
@@ -193,58 +178,49 @@ export default function SessionScreen() {
     const result = analyzeRecording(frames, demographicRisk);
     await saveAnalysis(result);
 
-    // Finalize the exercise pipeline. SessionSummary already nests every
-    // captured RepFeatures in summary.reps[] — that's the "one full schema
-    // for the video, with nested per-rep schemas" the spec asks for.
+    // Finalize the exercise pipeline and export the full session schema.
     const pipe = pipelineRef.current;
-    let exportedTo: string | null = null;
     if (pipe) {
       try {
-        const session = pipe.finalize();
+        const session   = pipe.finalize();
         const startedAt = recordStartedAtRef.current || (frames[0]?.t ?? Date.now());
         const endedAt   = frames[frames.length - 1]?.t ?? Date.now();
         const payload   = buildExportPayload(result.id, startedAt, endedAt, session);
 
-        console.log(
-          `[SessionScreen] ${session.reps.length} rep(s) detected — ` +
-          JSON.stringify(session.summary),
-        );
-        if (session.reps.length > 0) {
-          console.log('[SessionScreen] per-rep CSV:\n' + buildRepsCsv(session.reps));
-        }
+        console.log(`[export] ${session.reps.length} rep(s):`, JSON.stringify(session.summary));
 
-        // ── 1. Backend POST (preferred) — drops files on the laptop ─────────
-        const framesCsv = frames.length > 0 ? buildLandmarkCsv(frames, mode) : undefined;
-        const backendRes = await postSessionToBackend(BACKEND_URL, payload, framesCsv);
-        if (backendRes.ok) {
-          exportedTo = backendRes.writtenTo ?? '(unknown path)';
-          console.log('[SessionScreen] export → backend OK:', exportedTo);
+        // ── 1. AsyncStorage backup — always succeeds, no network needed ──────
+        // Guarantees the schema is never lost even if the Metro POST fails.
+        const sessionJson = buildSessionJson(result.id, startedAt, endedAt, session);
+        await AsyncStorage.setItem(`sentinel_schema_${result.id}`, sessionJson);
+
+        // ── 2a. Metro POST: session.json + reps.csv + reps.jsonl (small, fast) ─
+        const backendRes = await postSessionToBackend(BACKEND_URL, payload);
+        if (backendRes.ok && backendRes.writtenTo) {
+          console.log('[export] schema saved:', backendRes.writtenTo);
+          Alert.alert('Session exported', `Saved at:\n${backendRes.writtenTo}`);
+
+          // ── 2b. frames.csv — separate fire-and-forget POST (large, slow) ───
+          if (frames.length > 0) {
+            const framesCsv = buildLandmarkCsv(frames, mode);
+            postFramesToBackend(BACKEND_URL, payload.sessionId, backendRes.writtenTo, framesCsv)
+              .then(r => console.log('[export] frames.csv:', r.ok ? 'saved' : r.error))
+              .catch(e => console.error('[export] frames error:', e));
+          }
         } else {
-          console.warn('[SessionScreen] export → backend failed:', backendRes.error);
-        }
-
-        // ── 2. iOS share sheet (always offered as a manual fallback) ────────
-        // Don't auto-open the sheet on success — that would block the
-        // navigation back to the dashboard. Only pop it if the backend leg
-        // failed, so the user has a way to grab the data either way.
-        if (!backendRes.ok) {
+          console.error('[export] Metro POST failed:', backendRes.error);
+          // ── 3. Share sheet fallback ─────────────────────────────────────────
           await shareSessionViaSheet(payload);
         }
-        // Send to the laptop receiver (node tools/session-receiver.js).
-        // No-ops silently if the receiver isn't running.
-        await sendSessionToLaptop(result.id, session, frames, mode);
-      } catch (e) {
-        console.warn('[SessionScreen] exercise pipeline error:', (e as Error).message);
-      }
-    }
 
-    if (exportedTo) {
-      Alert.alert('Session exported', `Saved on backend at:\n${exportedTo}`);
+      } catch (e) {
+        console.error('[export] crash:', e);
+        Alert.alert('Export error', String((e as Error).message));
+      }
     }
 
     setRecordState('idle');
     recordingFrames.current = [];
-    repsRef.current = [];
     pipelineRef.current = null;
     navigation.navigate('Results');
   }, [navigation, mode]);

@@ -34,4 +34,4 @@ __pycache__/
 !.env.example
 
 # Session artifacts written by the phone via /exports/session
-exports/
+ios/zeticllmreactnativetemplate.xcworkspace/xcuserdata/sharanasabesan9.xcuserdatad/UserInterfaceState.xcuserstate/

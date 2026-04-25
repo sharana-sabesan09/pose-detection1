@@ -109,51 +109,83 @@ export interface BackendExportResult {
  *
  * Pass null/empty baseUrl to disable. Trailing slashes on baseUrl are fine.
  */
+/**
+ * Step 1 — POST session.json + reps.csv + reps.jsonl (small, fast).
+ * Returns the out_dir path that step 2 needs.
+ */
 export async function postSessionToBackend(
   baseUrl: string | null | undefined,
   payload: SessionExportPayload,
-  framesCsv?: string,
-  timeoutMs = 8000,
+  timeoutMs = 15000,
 ): Promise<BackendExportResult> {
   if (!baseUrl) return { ok: false, error: 'no backend URL configured' };
 
   const url = baseUrl.replace(/\/+$/, '') + '/exports/session';
-  const summaryJson = buildSessionJson(
-    payload.sessionId,
-    payload.startedAtMs,
-    payload.endedAtMs,
-    payload.summary,
-  );
 
-  const body = {
-    session_id:   payload.sessionId,
-    summary_json: summaryJson,
-    reps_csv:     payload.repsCsv,
-    reps_jsonl:   payload.repsJsonl,
-    frames_csv:   framesCsv,
-  };
+  const summaryJson = JSON.stringify({
+    sessionId:   payload.sessionId,
+    startedAtMs: payload.startedAtMs,
+    endedAtMs:   payload.endedAtMs,
+    durationMs:  payload.durationMs,
+    exercise:    payload.exercise,
+    numReps:     payload.numReps,
+    summary:     payload.summary,
+  });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(url, {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body:    JSON.stringify({
+        session_id:   payload.sessionId,
+        summary_json: summaryJson,
+        reps_csv:     payload.repsCsv,
+        reps_jsonl:   payload.repsJsonl,
+      }),
       signal: controller.signal,
     });
     clearTimeout(timer);
-    if (!res.ok) {
-      return { ok: false, status: res.status, error: `HTTP ${res.status}` };
-    }
+    if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     const data = await res.json().catch(() => ({}));
-    return {
-      ok:        true,
-      status:    res.status,
-      writtenTo: data?.written_to,
-      files:     data?.files,
-    };
+    return { ok: true, status: res.status, writtenTo: data?.written_to, files: data?.files };
+  } catch (e) {
+    clearTimeout(timer);
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * Step 2 — POST frames.csv separately to /exports/frames.
+ * Fire-and-forget from the caller — a failure here doesn't abort the export.
+ * out_dir is the path returned by postSessionToBackend.
+ */
+export async function postFramesToBackend(
+  baseUrl: string | null | undefined,
+  sessionId: string,
+  outDir: string,
+  framesCsv: string,
+  timeoutMs = 60000,
+): Promise<BackendExportResult> {
+  if (!baseUrl) return { ok: false, error: 'no backend URL configured' };
+
+  const url = baseUrl.replace(/\/+$/, '') + '/exports/frames';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ session_id: sessionId, out_dir: outDir, frames_csv: framesCsv }),
+      signal:  controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    const data = await res.json().catch(() => ({}));
+    return { ok: true, status: res.status, writtenTo: data?.written };
   } catch (e) {
     clearTimeout(timer);
     return { ok: false, error: (e as Error).message };
