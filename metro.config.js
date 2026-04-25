@@ -1,17 +1,18 @@
 /**
  * metro.config.js — METRO BUNDLER CONFIG + DEV-ONLY EXPORT ENDPOINT
  *
- * The phone POSTs session artifacts (full schema JSON, per-rep CSV, raw
- * landmark CSV, per-rep JSONL) to http://<laptop-ip>:8081/exports/session
- * while Metro is running. We attach a tiny middleware to Metro's existing
- * dev server so we don't have to spin up a separate FastAPI / node server
- * just to receive the artifacts during development.
+ * The primary mobile upload path now goes to FastAPI:
+ *   POST /auth/token
+ *   POST /sessions/exercise-result
+ *
+ * This Metro middleware remains available only for local dev artifact dumps.
+ * It accepts session JSON + CSV blobs at /exports/session and writes them to
+ * disk without requiring the Python backend.
  *
  * Files land in <repo>/exports/<UTC-stamp>_<session_id>/ on the Mac.
  *
- * If you ever switch to running the FastAPI backend (backend/run_agent.py),
- * point BACKEND_URL in src/constants.ts at that server instead — the route
- * shape (POST /exports/session) is identical.
+ * If you want the app to use the real ingest path locally, point
+ * BACKEND_URL in src/constants.ts at your FastAPI server (typically port 8000).
  */
 
 const path = require('path');

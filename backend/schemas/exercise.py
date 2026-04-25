@@ -76,6 +76,10 @@ class ExerciseSessionResult(BaseModel):
     summary: ExerciseSummary
     # optional — links the session to a patient record
     patientId: Optional[str] = None
+    # Optional artifact copies from the mobile app. Stored with the session
+    # row so the exact uploaded CSVs are queryable later.
+    repsCsv: Optional[str] = None
+    frameFeaturesCsv: Optional[str] = None
 
 
 class ExerciseSessionResponse(BaseModel):

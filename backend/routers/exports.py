@@ -1,17 +1,13 @@
 """
-routers/exports.py — RECEIVES SESSION ARTIFACTS FROM THE PHONE AND WRITES THEM TO LAPTOP DISK.
+routers/exports.py — DEV-ONLY artifact dump endpoint.
 
-The phone POSTs a JSON body with the final session schema and the
-per-rep / raw-frame CSVs as plain strings. We dump them under
-<repo>/exports/<session_id>/ on whatever machine is running the
-backend, so the user can grab them off their laptop without ever
-plugging into Xcode.
+This route writes uploaded session artifacts to local disk under
+<repo>/exports/<session_id>/. It is no longer the primary mobile ingest path;
+the app now POSTs production uploads to /sessions/exercise-result instead.
 
 Auth: skipped while DEV_MODE is on (matches the rest of the dev flow).
 """
 
-import csv
-import io
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +21,7 @@ from sqlalchemy import select
 from config import settings
 from db.session import get_db
 from db.models import ExerciseSession, PoseFrame
+from utils.frame_csv import parse_frame_features_csv
 
 
 # Resolve <repo>/exports relative to this file. backend/routers/exports.py
@@ -47,38 +44,6 @@ class SessionExportResponse(BaseModel):
     session_id: str
     written_to: str
     files: list[str]
-
-
-# Numeric columns from the frame-level debug CSV that go into angles_json.
-# "frame", "timestamp", and "side" are metadata, not angle values.
-_FRAME_NUMERIC_COLS = {
-    "knee_flex", "fppa", "trunk_lean", "trunk_flex",
-    "pelvic_drop", "hip_adduction", "knee_offset",
-    "midhip_x", "midhip_y", "velocity",
-}
-
-
-def _parse_frames_csv(csv_text: str) -> list[dict]:
-    """Return a list of {timestamp, angles_json} dicts, one per frame row."""
-    reader = csv.DictReader(io.StringIO(csv_text))
-    rows = []
-    for row in reader:
-        ts_raw = row.get("timestamp", "")
-        try:
-            ts = float(ts_raw)
-        except (ValueError, TypeError):
-            continue  # skip malformed rows
-        angles = {}
-        for col in _FRAME_NUMERIC_COLS:
-            raw = row.get(col, "")
-            if raw:
-                try:
-                    angles[col] = float(raw)
-                except ValueError:
-                    pass
-        if angles:
-            rows.append({"timestamp": ts, "angles_json": angles})
-    return rows
 
 
 @router.post("/session", response_model=SessionExportResponse)
@@ -131,7 +96,7 @@ async def export_session(
         )
         ex = result.scalars().first()
         if ex and ex.linked_session_id:
-            frame_rows = _parse_frames_csv(body.frames_csv)
+            frame_rows = parse_frame_features_csv(body.frames_csv)
             for fr in frame_rows:
                 db.add(PoseFrame(
                     id=str(uuid.uuid4()),

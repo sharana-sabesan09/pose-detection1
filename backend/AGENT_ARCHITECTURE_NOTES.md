@@ -18,6 +18,11 @@ Both sessions produced `overallRating: "poor"`. All reps across both sessions we
 | `hipAdductionPeak == 0` sentinel not guarded | **Fixed** | `exclude_zero=True` in `feat_stats()` — landmark-loss sentinels excluded from all hip stats |
 | `swayNorm` and `balance` not reaching fall risk | **Fixed** | `exercise_reporter_agent` derives `fall_risk_score` from swayNorm, pelvicDropPeak, and balance error rate |
 | `consistency` not reaching reinjury risk | **Fixed** | `exercise_reporter_agent` derives `reinjury_risk_score` from consistency, mean error rate, poor-rep rate |
+| Mobile app posted to dev-only `/exports/session` instead of DB ingest | **Fixed** | React Native app now requests a JWT then uploads directly to `POST /sessions/exercise-result` |
+| Uploaded CSV artifacts never reached PostgreSQL | **Fixed** | `repsCsv` and `frameFeaturesCsv` are stored on `exercise_sessions` |
+| Raw landmark CSV was incompatible with `pose_frames` ingestion | **Fixed** | Mobile app now uploads frame-feature CSV (`frame,timestamp,knee_flex,...`) and backend parses it into `pose_frames` |
+| Production upload path lacked JWT auth | **Fixed** | React Native app now calls `POST /auth/token` before `POST /sessions/exercise-result` |
+| Anonymous exercise uploads could not create linked sessions | **Fixed** | `sessions.patient_id` is now nullable, matching the exercise schema's optional `patientId` |
 | `pose_analysis_agent` duplicates mobile work | **Deferred** | Still used for PT frame sessions; only exercise path bypasses it |
 | Agentverse path undocumented entry point | **Deferred** | HTTP pipeline is the active path; Agentverse remains optional |
 
@@ -28,11 +33,12 @@ Both sessions produced `overallRating: "poor"`. All reps across both sessions we
 ```
 Mobile app                    Backend DB                    Agents
 ──────────                    ──────────                    ──────
-ExerciseSessionResult ──▶  exercise_sessions          ──▶  exercise_reporter_agent
-                            rep_analyses                     │  (filters reps, guards sentinels)
-                            Session (linked)                 │  writes Summary + SessionScore
-                                                             │
-                                                             └──▶ progress_agent (if ≥3 sessions)
+POST /auth/token      ──▶   JWT
+POST /sessions/exercise-result ──▶ exercise_sessions ──▶  exercise_reporter_agent
+                                    rep_analyses           │  (filters reps, guards sentinels)
+                                    pose_frames            │  writes Summary + SessionScore
+                                    Session (linked)       │
+                                                           └──▶ progress_agent (if ≥3 sessions)
 
 POST /sessions/start ──▶   sessions
 POST /sessions/frame ──▶   pose_frames          ──▶  pose_analysis_agent
@@ -118,7 +124,10 @@ Keyed on the dominant errors (those > 50% of good reps) so clinical guidelines r
 
 **Receives:** Raw `PoseFrame` rows with `angles_json`
 
-**Problem (unchanged):** Mobile app does not store raw frames via the exercise path. The 12 biomechanical features per rep computed by the mobile app are richer than what this agent re-derives from three synthetic joints.
+**Problem (updated):** The exercise path now stores frame-feature rows in
+`pose_frames`, but the exercise pipeline still bypasses `pose_analysis_agent`
+because the native per-rep biomechanical features are richer than the ROM-only
+summary this agent re-derives.
 
 **Status:** Still used for the PT frame path (`POST /sessions/frame` + `POST /sessions/end`). Not used in the exercise pipeline.
 
@@ -181,7 +190,7 @@ No clinical PDFs have been ingested into ChromaDB. The RAG context in all agents
 
 Services communicate over Railway's private network. `sentinel-backend` connects to Postgres via `DATABASE_URL=postgresql://postgres:...@postgres.railway.internal:5432/railway` (rewritten to `postgresql+asyncpg://` by the `fix_db_scheme` validator in `config.py`).
 
-The `releaseCommand = "uv run alembic upgrade head"` in `railway.toml` runs Alembic migrations before each deploy is promoted to live traffic. All three migrations (0001 initial, 0002 exercise sessions, 0003 linked session) applied successfully on first deploy.
+The `releaseCommand = "uv run alembic upgrade head"` in `railway.toml` runs Alembic migrations before each deploy is promoted to live traffic. Current schema includes migrations `0001` through `0004`, including linked sessions, uploaded exercise CSV artifacts, and nullable `sessions.patient_id` for anonymous exercise uploads.
 
 ---
 

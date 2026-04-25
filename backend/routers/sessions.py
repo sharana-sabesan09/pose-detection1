@@ -11,6 +11,7 @@ from schemas.report import SessionStartRequest, SessionStartResponse, FrameReque
 from schemas.exercise import ExerciseSessionResult, ExerciseSessionResponse
 from agents.orchestrator import run_session_pipeline, run_exercise_pipeline
 from routers.auth import require_jwt
+from utils.frame_csv import parse_frame_features_csv
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -113,6 +114,8 @@ async def store_exercise_result(
         ended_at_ms=body.endedAtMs,
         duration_ms=body.durationMs,
         summary_json=body.summary.summary.model_dump(),
+        reps_csv=body.repsCsv,
+        frame_features_csv=body.frameFeaturesCsv,
         linked_session_id=linked_session.id,
     )
     db.add(exercise_session)
@@ -152,6 +155,15 @@ async def store_exercise_result(
             classification=rep.score.classification,
             confidence=rep.confidence,
         ))
+
+    if body.frameFeaturesCsv:
+        for fr in parse_frame_features_csv(body.frameFeaturesCsv):
+            db.add(PoseFrame(
+                id=str(uuid.uuid4()),
+                session_id=linked_session.id,
+                timestamp=fr["timestamp"],
+                angles_json=fr["angles_json"],
+            ))
 
     linked_session_id = linked_session.id  # capture before commit expires the ORM object
     await db.commit()

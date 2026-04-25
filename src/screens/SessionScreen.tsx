@@ -185,7 +185,8 @@ export default function SessionScreen() {
         const session   = pipe.finalize();
         const startedAt = recordStartedAtRef.current || (frames[0]?.t ?? Date.now());
         const endedAt   = frames[frames.length - 1]?.t ?? Date.now();
-        const payload   = buildExportPayload(result.id, startedAt, endedAt, session);
+        const frameFeatures = pipe.getAllFrames();
+        const payload = buildExportPayload(result.id, startedAt, endedAt, session, frameFeatures);
 
         console.log(`[export] ${session.reps.length} rep(s):`, JSON.stringify(session.summary));
 

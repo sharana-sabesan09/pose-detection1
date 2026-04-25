@@ -33,7 +33,9 @@ backend/
 │   └── migrations/
 │       └── versions/
 │           ├── 0001_initial.py
-│           └── 0002_exercise_sessions.py
+│           ├── 0002_exercise_sessions.py
+│           ├── 0003_exercise_linked_session.py
+│           └── 0004_exercise_artifacts_and_nullable_session_patient.py
 │
 ├── routers/
 │   ├── auth.py              JWT issue + require_jwt dependency
@@ -75,9 +77,15 @@ backend/
 
 ### Exercise session schema
 
-The mobile app completes on-device pose analysis and POSTs the full result to `POST /sessions/exercise-result`. The backend stores it in two tables:
+The mobile app completes on-device pose analysis, requests a JWT from
+`POST /auth/token`, then POSTs the full result to `POST /sessions/exercise-result`.
+The backend stores the upload in three places:
 
-**`exercise_sessions`** holds the session-level envelope: `mobile_session_id` (the ISO timestamp from the phone, `unique`), `exercise`, `num_reps`, timing ms fields, and `summary_json` (aggregate stats: avgDepth, avgFppa, consistency, overallRating).
+**`exercise_sessions`** holds the session-level envelope: `mobile_session_id`
+(the ISO timestamp from the phone, `unique`), `exercise`, `num_reps`, timing ms
+fields, `summary_json` (aggregate stats: avgDepth, avgFppa, consistency,
+overallRating), plus the uploaded CSV artifacts `reps_csv` and
+`frame_features_csv`.
 
 **`rep_analyses`** holds one row per rep with flat, typed columns for every feature and error flag — making them directly queryable for analytics without JSON extraction:
 
@@ -91,6 +99,11 @@ pelvic_shift, hip_adduction, knee_over_foot, balance
 
 total_errors, classification, confidence
 ```
+
+**`pose_frames`** receives parsed rows from `frameFeaturesCsv` against the
+linked companion `sessions` row. That keeps the uploaded frame-feature trace in
+the database for fallback analysis and debugging without relying on the
+dev-only exports endpoint.
 
 ### Migrations
 
@@ -125,7 +138,7 @@ Token lifetime: 24 hours. Algorithm: HS256. Secret: `JWT_SECRET` env var.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/sessions/exercise-result` | JWT | Receive a complete processed session from the mobile app (squat etc.), persist to `exercise_sessions` + `rep_analyses`. Returns 409 if the same `sessionId` was already stored. |
+| POST | `/sessions/exercise-result` | JWT | Receive a complete processed session from the mobile app (squat etc.), persist the schema and uploaded CSV artifacts to `exercise_sessions`, rep rows to `rep_analyses`, and parsed frame-feature rows to `pose_frames` via a linked companion session. Returns 409 if the same `sessionId` was already stored. |
 
 ### Reports
 
@@ -138,7 +151,7 @@ Token lifetime: 24 hours. Algorithm: HS256. Secret: `JWT_SECRET` env var.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/exports/session` | None (DEV_MODE) | Write session JSON + CSVs to `<repo>/exports/<timestamp>_<session_id>/` on the local machine. Returns 403 in production. |
+| POST | `/exports/session` | None (DEV_MODE) | Dev-only artifact dump: write session JSON + CSVs to `<repo>/exports/<timestamp>_<session_id>/` on the local machine. Not used by the mobile app's production upload flow. Returns 403 in production. |
 
 ### Health
 
@@ -148,9 +161,12 @@ Token lifetime: 24 hours. Algorithm: HS256. Secret: `JWT_SECRET` env var.
 
 ---
 
-## Agent pipeline (PT path)
+## Agent pipeline
 
-Two execution paths exist. The HTTP path is the only one currently triggered by the mobile app. The Agentverse path enables external orchestration via Fetch.ai.
+Three execution paths exist. The PT HTTP path powers clinician-style
+`/sessions/{id}/end`, the exercise HTTP path powers mobile uploads to
+`/sessions/exercise-result`, and the Agentverse path enables external
+orchestration via Fetch.ai.
 
 ### HTTP path (`orchestrator.py`)
 
@@ -172,6 +188,18 @@ run_progress()   ← only if patient has ≥ 3 sessions
 Each step is wrapped in its own `try/except`. If a step fails, `failed_agents` is populated, the current results are committed, and the pipeline short-circuits — no downstream agent runs. This ensures partial results are never lost.
 
 A single `db.commit()` at the end commits everything accumulated across all agents.
+
+### Exercise HTTP path (`/sessions/exercise-result` → `run_exercise_pipeline`)
+
+The mobile app uploads the already-processed exercise session schema and CSV
+artifacts. The backend then:
+
+1. creates a linked companion `sessions` row
+2. stores the uploaded envelope in `exercise_sessions`
+3. stores one row per rep in `rep_analyses`
+4. parses `frameFeaturesCsv` into `pose_frames`
+5. runs `exercise_reporter_agent` in the background
+6. runs `progress_agent` if the patient has 3+ linked sessions
 
 ### Agentverse path (`agentverse_agent.py` + `bureau.py`)
 
@@ -209,9 +237,9 @@ The index is built once on first load and cached in-process. Re-ingest by deleti
 `require_jwt` is a FastAPI dependency injected into every protected route.
 
 - **DEV_MODE = True** (default in `.env`): the dependency short-circuits and returns `{"user_id": "dev", "role": "admin"}` without checking any header. This means the mobile app does not need to manage tokens during local development.
-- **DEV_MODE = False**: a valid `Authorization: Bearer <token>` header is required. The token is verified with `JWT_SECRET` and the HS256 algorithm. A 401 is raised on missing or invalid tokens.
+- **DEV_MODE = False**: a valid `Authorization: Bearer <token>` header is required. The token is verified with `JWT_SECRET` and the HS256 algorithm. A 401 is raised on missing or invalid tokens. The mobile app now requests this token from `POST /auth/token` before uploading to `POST /sessions/exercise-result`.
 
-The `/exports/session` endpoint also uses `DEV_MODE` as its gate — it returns 403 in production regardless of auth headers.
+The `/exports/session` endpoint also uses `DEV_MODE` as its gate — it returns 403 in production regardless of auth headers, and is only intended for local artifact dumping.
 
 ---
 
