@@ -3,6 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from rag.loader import load_clinical_guidelines
+from db.session import run_migrations
 import routers.auth as auth
 import routers.sessions as sessions
 import routers.reports as reports
@@ -13,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure schema is current before accepting traffic.  Railway's
+    # releaseCommand is the fast path; this is the safety net for cases where
+    # it was skipped, failed silently, or the first deploy predated the command.
+    await run_migrations()
+
     # Load in a thread so /health responds immediately during cold boot.
     # Agents degrade gracefully (LLM-only) until the index is ready.
     loop = asyncio.get_event_loop()

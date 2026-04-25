@@ -2,7 +2,7 @@ node_modules/
 .vscode/
 .DS_Store
 .idea/
-.claude/settings.local.json
+settings.local.json
 
 # iOS generated
 ios/Pods/

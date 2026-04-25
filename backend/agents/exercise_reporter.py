@@ -22,12 +22,11 @@ import statistics
 import uuid
 from datetime import datetime
 
-from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.hipaa import hipaa_wrap
-from config import settings
+from agents._client import gemini_client as _client, GEMINI_MODEL as _MODEL
 from db.models import Session, SessionScore, Summary
 from rag.retriever import retrieve_clinical_context
 from schemas.exercise import ExerciseSessionResult
@@ -35,9 +34,6 @@ from schemas.session import ExerciseReporterOutput
 from utils.audit import write_audit
 
 logger = logging.getLogger(__name__)
-
-_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-_MODEL = "gpt-4o"
 
 # Rep quality gates
 _MIN_CONFIDENCE = 0.7

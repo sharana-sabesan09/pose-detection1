@@ -2,22 +2,18 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uagents import Agent, Context
-from config import settings
 from db.models import SessionScore
 from schemas.session import IntakeOutput, PoseAnalysisOutput, FallRiskOutput
 from rag.retriever import retrieve_clinical_context
 from agents.hipaa import hipaa_wrap
+from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.messages import FallRiskRequest, FallRiskResponse
 from utils.audit import write_audit
 
 logger = logging.getLogger(__name__)
-
-_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-_MODEL = "gpt-4o"
 
 
 async def run_fall_risk(

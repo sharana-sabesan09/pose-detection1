@@ -1,18 +1,14 @@
 import json
 import logging
-from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 from uagents import Agent, Context
-from config import settings
 from schemas.session import IntakeInput, IntakeOutput
 from agents.hipaa import hipaa_wrap
+from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.messages import IntakeRequest, IntakeResponse
 from utils.audit import write_audit
 
 logger = logging.getLogger(__name__)
-
-_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-_MODEL = "gpt-4o"
 
 
 async def run_intake(intake: IntakeInput, db: AsyncSession) -> IntakeOutput:
