@@ -30,7 +30,7 @@ export const HIP_DETECT = {
   BASELINE_ALPHA: 0.02,
 
   /** Minimum hip descent relative to baseline to trigger a squat (screen-fraction). */
-  AMP_THRESH: 0.06,
+  AMP_THRESH: 0.01,
 
   /** Rolling-mean window (frames) applied before thresholding. */
   SMOOTH_WINDOW: 7,

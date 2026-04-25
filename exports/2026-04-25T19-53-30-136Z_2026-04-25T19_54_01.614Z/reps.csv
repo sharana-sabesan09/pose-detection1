@@ -1,0 +1,2 @@
+rep_id,side,depth_deg,rom_ratio,fppa_peak,fppa_at_depth,trunk_lean_peak,trunk_flex_peak,pelvic_drop_peak,pelvic_shift_peak,hip_adduction_peak,knee_offset_peak,sway_norm,smoothness,errors_count,classification,err_knee_valgus,err_trunk_lean,err_trunk_flex,err_pelvic_drop,err_pelvic_shift,err_hip_adduction,err_knee_over_foot,err_balance,start_frame,bottom_frame,end_frame,duration_ms,confidence
+1,left,50.33,0.419,50.33,6.87,13.20,72.57,44.74,0.0882,178.95,5.1366,0.0186,211.591,6,poor,1,1,1,1,0,1,1,0,1242,1372,1454,3697,0.834
