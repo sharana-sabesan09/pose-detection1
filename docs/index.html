@@ -32,7 +32,7 @@
     const landmarker = await PoseLandmarker.createFromOptions(vision, {
       baseOptions: {
         modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
-        delegate: 'GPU'
+        delegate: 'CPU'
       },
       runningMode: 'VIDEO',
       numPoses: 1,
@@ -44,10 +44,19 @@
     msg.textContent = 'Starting camera…';
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false
-      });
+      // Try rear camera first, fall back to any camera (simulator has no rear camera)
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+      } catch (_) {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+      }
       video.srcObject = stream;
       await new Promise(r => video.addEventListener('loadeddata', r, { once: true }));
       msg.textContent = '';
