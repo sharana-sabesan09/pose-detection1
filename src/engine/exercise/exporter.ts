@@ -23,7 +23,6 @@
 import { Share } from 'react-native';
 import { FrameFeatures, RepFeatures, SessionSummary } from './types';
 import { buildFrameDebugCsv, buildRepsCsv } from './csvWriter';
-import { backendRequest } from '../backendClient';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schema builders
@@ -272,9 +271,9 @@ export async function postSessionToLocalExports(
 }
 
 /**
- * Step 2 — POST frames.csv separately to /exports/frames.
- * Fire-and-forget from the caller — a failure here doesn't abort the export.
- * out_dir is the path returned by postSessionToBackend.
+ * Optional dev helper for sending frames.csv to the exports router separately.
+ * The main production upload already includes frameFeaturesCsv in
+ * POST /sessions/exercise-result.
  */
 export async function postFramesToBackend(
   baseUrl: string | null | undefined,

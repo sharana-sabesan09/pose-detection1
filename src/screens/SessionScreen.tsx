@@ -202,7 +202,14 @@ export default function SessionScreen() {
         const startedAt = recordStartedAtRef.current || (frames[0]?.t ?? Date.now());
         const endedAt   = frames[frames.length - 1]?.t ?? Date.now();
         const frameFeatures = pipe.getFrameBuffer();
-        const payload = buildExportPayload(result.id, startedAt, endedAt, session, frameFeatures);
+        const payload = buildExportPayload(
+          result.id,
+          startedAt,
+          endedAt,
+          session,
+          frameFeatures,
+          profileRef.current?.patientId ?? null,
+        );
 
         console.log(`[export] ${session.reps.length} rep(s):`, JSON.stringify(session.summary));
 
@@ -224,20 +231,28 @@ export default function SessionScreen() {
 
         // 2b) Railway/Postgres ingest (non-fatal if it fails).
         const backendRes = await postSessionToBackend(BACKEND_URL, payload);
-        if (backendRes.ok && backendRes.writtenTo) {
-          console.log('[export] schema saved:', backendRes.writtenTo);
-          Alert.alert('Session exported', `Saved at:\n${backendRes.writtenTo}`);
-
-          // ── 2b. frames.csv — separate fire-and-forget POST (large, slow) ───
-          if (frames.length > 0) {
-            const framesCsv = buildLandmarkCsv(frames, mode);
-            postFramesToBackend(BACKEND_URL, payload.sessionId, backendRes.writtenTo, framesCsv)
-              .then(r => console.log('[export] frames.csv:', r.ok ? 'saved' : r.error))
-              .catch(e => console.error('[export] frames error:', e));
+        if (backendRes.ok) {
+          console.log('[export] session stored:', backendRes.id, backendRes.linkedSessionId);
+          if (localExportRes.ok && localExportRes.writtenTo) {
+            Alert.alert(
+              'Session exported',
+              `Railway upload succeeded.\nLocal files saved at:\n${localExportRes.writtenTo}`,
+            );
+          } else {
+            Alert.alert('Session exported', 'Uploaded successfully to backend.');
           }
         } else {
-          console.error('[export] Metro POST failed:', backendRes.error);
-          // ── 3. Share sheet fallback ─────────────────────────────────────────
+          const detail = backendRes.detail ?? backendRes.error ?? 'Unknown backend error';
+          console.error('[export] backend POST failed:', detail);
+          // Non-fatal: report error, continue session flow, and offer manual share.
+          if (localExportRes.ok && localExportRes.writtenTo) {
+            Alert.alert(
+              'Railway upload failed (non-fatal)',
+              `${detail}\n\nLocal export is saved at:\n${localExportRes.writtenTo}`,
+            );
+          } else {
+            Alert.alert('Backend export failed', detail);
+          }
           await shareSessionViaSheet(payload);
         }
 
