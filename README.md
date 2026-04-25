@@ -64,9 +64,9 @@ uv sync                    # install dependencies (uses uv lockfile)
 python run_agent.py        # starts FastAPI (port 8000) + Fetch.ai Bureau
 ```
 
-API available at `http://localhost:8000`. Swagger UI at `/docs`.
+API available at `http://localhost:8081`. Docs at `/docs`.
 
-`run_agent.py` starts the FastAPI server (port 8000) as a daemon thread and the Fetch.ai Bureau (all 7 uAgents) in the main thread. SQLite is used locally by default — no database setup required.
+`python run_agent.py` starts both the FastAPI server (port 8081) and the Fetch.ai Bureau (all 7 uAgents) in one process.
 
 ---
 

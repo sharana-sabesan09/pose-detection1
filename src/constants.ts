@@ -30,4 +30,4 @@ export const POSE_MODEL_KEY = 'a2ee025f302841a2b178883c361b4285';
 //   • If you switch to FastAPI later (backend/run_agent.py), change the
 //     port to 8000.
 //   • Set to '' to disable backend POST and use only the iOS share sheet.
-export const BACKEND_URL = 'http://192.168.1.100:8081';
+export const BACKEND_URL = 'http://10.30.120.54:8081';
