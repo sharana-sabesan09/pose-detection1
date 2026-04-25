@@ -1,17 +1,15 @@
 /**
  * src/engine/exercise/exporter.ts — SHIP SESSION ARTIFACTS OFF THE PHONE
  *
- * Two complementary exit paths so the user can pick the artifacts up
- * on a laptop without ever attaching the phone to Xcode:
+ * Two complementary exit paths:
  *
- *   1. Backend POST  — fetch() to <BACKEND_URL>/exports/session.
- *                      The laptop writes session.json / reps.csv / reps.jsonl
- *                      / frames.csv into <repo>/exports/<stamp>_<id>/.
- *                      Preferred path. Requires phone + laptop on same LAN.
+ *   1. Backend POST  — fetch() to <BACKEND_URL>/sessions/exercise-result.
+ *                      Preferred path. Persists the uploaded schema into
+ *                      PostgreSQL (`exercise_sessions`, `rep_analyses`) and
+ *                      stores frame-feature rows into `pose_frames`.
  *
  *   2. iOS share sheet — Share.share({ message }). AirDrop / Mail / Files /
- *                        Notes. No native deps, no pod install. Used as a
- *                        fallback or "share again" affordance.
+ *                        Notes. Used as a fallback if the backend upload fails.
  *
  * The functions are pure async; SessionScreen calls them in finishRecording.
  *
@@ -23,8 +21,8 @@
  */
 
 import { Share } from 'react-native';
-import { RepFeatures, SessionSummary } from './types';
-import { buildRepsCsv } from './csvWriter';
+import { FrameFeatures, RepFeatures, SessionSummary } from './types';
+import { buildFrameDebugCsv, buildRepsCsv } from './csvWriter';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schema builders
@@ -42,6 +40,10 @@ export interface SessionExportPayload {
   repsJsonl:    string;
   /** Same data, CSV form. */
   repsCsv:      string;
+  /** Per-frame exercise features, CSV form. */
+  frameFeaturesCsv: string;
+  /** Optional backend patient linkage. */
+  patientId?: string | null;
 }
 
 /**
@@ -76,6 +78,8 @@ export function buildExportPayload(
   startedAtMs: number,
   endedAtMs: number,
   summary: SessionSummary,
+  frameFeatures: FrameFeatures[],
+  patientId?: string | null,
 ): SessionExportPayload {
   return {
     sessionId,
@@ -87,6 +91,8 @@ export function buildExportPayload(
     summary,
     repsJsonl:  buildRepsJsonl(summary.reps),
     repsCsv:    buildRepsCsv(summary.reps),
+    frameFeaturesCsv: buildFrameDebugCsv(frameFeatures),
+    patientId: patientId ?? null,
   };
 }
 
@@ -97,13 +103,42 @@ export function buildExportPayload(
 export interface BackendExportResult {
   ok:        boolean;
   status?:   number;
-  writtenTo?: string;
-  files?:    string[];
+  id?:        string;
+  linkedSessionId?: string;
   error?:    string;
 }
 
+let cachedAccessToken: string | null = null;
+
+async function getBackendToken(baseUrl: string, timeoutMs: number): Promise<string> {
+  if (cachedAccessToken) return cachedAccessToken;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const tokenUrl = baseUrl.replace(/\/+$/, '') + '/auth/token';
+    const res = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: 'mobile-app', role: 'mobile' }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`token request failed with HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    if (!data?.access_token) {
+      throw new Error('token response missing access_token');
+    }
+    cachedAccessToken = data.access_token;
+    return cachedAccessToken;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
- * POST the session artifacts to the laptop running the FastAPI backend.
+ * POST the completed exercise session to the FastAPI backend.
  * Returns ok=false (never throws) so the caller can fall back to the
  * share sheet without a try/catch dance.
  *
@@ -112,50 +147,56 @@ export interface BackendExportResult {
 export async function postSessionToBackend(
   baseUrl: string | null | undefined,
   payload: SessionExportPayload,
-  framesCsv?: string,
   timeoutMs = 8000,
 ): Promise<BackendExportResult> {
   if (!baseUrl) return { ok: false, error: 'no backend URL configured' };
 
-  const url = baseUrl.replace(/\/+$/, '') + '/exports/session';
-  const summaryJson = buildSessionJson(
-    payload.sessionId,
-    payload.startedAtMs,
-    payload.endedAtMs,
-    payload.summary,
-  );
+  const url = baseUrl.replace(/\/+$/, '') + '/sessions/exercise-result';
 
   const body = {
-    session_id:   payload.sessionId,
-    summary_json: summaryJson,
-    reps_csv:     payload.repsCsv,
-    reps_jsonl:   payload.repsJsonl,
-    frames_csv:   framesCsv,
+    sessionId: payload.sessionId,
+    startedAtMs: payload.startedAtMs,
+    endedAtMs: payload.endedAtMs,
+    durationMs: payload.durationMs,
+    exercise: payload.exercise,
+    numReps: payload.numReps,
+    summary: payload.summary,
+    patientId: payload.patientId ?? null,
+    repsCsv: payload.repsCsv,
+    frameFeaturesCsv: payload.frameFeaturesCsv,
   };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const token = await getBackendToken(baseUrl, timeoutMs);
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
     clearTimeout(timer);
     if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        cachedAccessToken = null;
+      }
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }
     const data = await res.json().catch(() => ({}));
     return {
       ok:        true,
       status:    res.status,
-      writtenTo: data?.written_to,
-      files:     data?.files,
+      id: data?.id,
+      linkedSessionId: data?.linkedSessionId,
     };
   } catch (e) {
     clearTimeout(timer);
+    cachedAccessToken = null;
     return { ok: false, error: (e as Error).message };
   }
 }

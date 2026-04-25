@@ -44,6 +44,7 @@ export interface ExercisePipelineOptions {
 
 export class ExercisePipeline {
   private buffer: FrameFeatures[] = [];
+  private allFrames: FrameFeatures[] = [];
   private prevFrame: FrameFeatures | undefined;
   private state: RepState = 'IDLE';
   private aggregator = new RepAggregator();
@@ -75,6 +76,7 @@ export class ExercisePipeline {
     const frame = computeFrameFeatures(timestamp, raw, norm, this.prevFrame);
 
     // 3. Buffer + window stats
+    this.allFrames.push(frame);
     this.buffer.push(frame);
     if (this.buffer.length > this.bufferMaxFrames) {
       this.buffer.splice(0, this.buffer.length - this.bufferMaxFrames);
@@ -126,4 +128,5 @@ export class ExercisePipeline {
   getReps():  RepFeatures[] { return this.reps.slice(); }
   getLastWindowStats(): WindowStats { return this.lastWindowStats; }
   getFrameBuffer(): FrameFeatures[] { return this.buffer.slice(); }
+  getAllFrames(): FrameFeatures[] { return this.allFrames.slice(); }
 }

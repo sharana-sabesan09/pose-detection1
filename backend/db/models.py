@@ -30,7 +30,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    patient_id = Column(String(36), ForeignKey("patients.id"), nullable=False)
+    patient_id = Column(String(36), ForeignKey("patients.id"), nullable=True)
     pt_plan = Column(Text, nullable=True)
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     ended_at = Column(DateTime, nullable=True)
@@ -104,6 +104,8 @@ class ExerciseSession(Base):
     duration_ms = Column(Float, nullable=False)
     # Aggregate summary stats (avgDepth, consistency, overallRating, etc.)
     summary_json = Column(JSON, nullable=True)
+    reps_csv = Column(Text, nullable=True)
+    frame_features_csv = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # When set, raw PoseFrame rows are stored against this Session so the

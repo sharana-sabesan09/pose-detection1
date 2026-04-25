@@ -13,6 +13,6 @@ export const PERSONAL_ACCESS_KEY = 'YOUR_ZETIC_PERSONAL_ACCESS_KEY';
 export const POSE_MODEL_KEY      = 'YOUR_ZETIC_MEDIAPIPE_POSE_MODEL_KEY';
 
 // Production: Railway FastAPI backend URL.
-// For local dev: your laptop's LAN IP + Metro port (e.g. http://10.0.0.x:8081)
-// or FastAPI at http://localhost:8000. Set to '' to disable backend POST.
+// For local dev: your laptop's LAN IP + FastAPI port (e.g. http://10.0.0.x:8000).
+// Set to '' to disable backend POST.
 export const BACKEND_URL         = 'https://sentinel-backend-production-e75a.up.railway.app';

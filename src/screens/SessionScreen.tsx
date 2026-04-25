@@ -35,7 +35,7 @@ import {
   saveAnalysis,
   RecordedFrame,
 } from '../engine/analyzeRecording';
-import { buildLandmarkCsv, buildRepsCsv } from '../engine/csvLogger';
+import { buildRepsCsv } from '../engine/csvLogger';
 import { ExercisePipeline } from '../engine/exercise/pipeline';
 import {
   buildExportPayload,
@@ -203,7 +203,8 @@ export default function SessionScreen() {
         const session = pipe.finalize();
         const startedAt = recordStartedAtRef.current || (frames[0]?.t ?? Date.now());
         const endedAt   = frames[frames.length - 1]?.t ?? Date.now();
-        const payload   = buildExportPayload(result.id, startedAt, endedAt, session);
+        const frameFeatures = pipe.getAllFrames();
+        const payload = buildExportPayload(result.id, startedAt, endedAt, session, frameFeatures);
 
         console.log(
           `[SessionScreen] ${session.reps.length} rep(s) detected — ` +
@@ -212,15 +213,17 @@ export default function SessionScreen() {
         if (session.reps.length > 0) {
           console.log('[SessionScreen] per-rep CSV:\n' + buildRepsCsv(session.reps));
         }
+        if (frameFeatures.length > 0) {
+          console.log('[SessionScreen] frame-feature CSV rows:', frameFeatures.length);
+        }
 
-        // ── 1. Backend POST (preferred) — drops files on the laptop ─────────
-        const framesCsv = frames.length > 0 ? buildLandmarkCsv(frames, mode) : undefined;
-        const backendRes = await postSessionToBackend(BACKEND_URL, payload, framesCsv);
+        // ── 1. Backend POST (preferred) — persists to Railway PostgreSQL ────
+        const backendRes = await postSessionToBackend(BACKEND_URL, payload);
         if (backendRes.ok) {
-          exportedTo = backendRes.writtenTo ?? '(unknown path)';
-          console.log('[SessionScreen] export → backend OK:', exportedTo);
+          exportedTo = backendRes.linkedSessionId ?? backendRes.id ?? '(stored)';
+          console.log('[SessionScreen] upload → backend OK:', exportedTo);
         } else {
-          console.warn('[SessionScreen] export → backend failed:', backendRes.error);
+          console.warn('[SessionScreen] upload → backend failed:', backendRes.error);
         }
 
         // ── 2. iOS share sheet (always offered as a manual fallback) ────────
@@ -230,16 +233,13 @@ export default function SessionScreen() {
         if (!backendRes.ok) {
           await shareSessionViaSheet(payload);
         }
-        // Send to the laptop receiver (node tools/session-receiver.js).
-        // No-ops silently if the receiver isn't running.
-        await sendSessionToLaptop(result.id, session, frames, mode);
       } catch (e) {
         console.warn('[SessionScreen] exercise pipeline error:', (e as Error).message);
       }
     }
 
     if (exportedTo) {
-      Alert.alert('Session exported', `Saved on backend at:\n${exportedTo}`);
+      Alert.alert('Session uploaded', `Stored in backend session:\n${exportedTo}`);
     }
 
     setRecordState('idle');

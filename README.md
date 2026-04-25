@@ -64,9 +64,28 @@ uv sync                    # install dependencies (uses uv lockfile)
 python run_agent.py        # starts FastAPI (port 8000) + Fetch.ai Bureau
 ```
 
-API available at `http://localhost:8081`. Docs at `/docs`.
+API available at `http://localhost:8000`. Docs at `/docs`.
 
-`python run_agent.py` starts both the FastAPI server (port 8081) and the Fetch.ai Bureau (all 7 uAgents) in one process.
+`python run_agent.py` starts both the FastAPI server (port 8000) and the Fetch.ai Bureau (all 7 uAgents) in one process.
+
+---
+
+## Mobile Upload Path
+
+At the end of recording, the React Native app now uploads completed exercise
+sessions through the production ingest flow:
+
+1. `POST /auth/token`
+2. `POST /sessions/exercise-result`
+
+That upload persists the mobile schema to `exercise_sessions.summary_json`,
+stores per-rep rows in `rep_analyses`, stores the uploaded CSV artifacts in
+`exercise_sessions.reps_csv` and `exercise_sessions.frame_features_csv`, and
+parses frame-feature rows into `pose_frames` via the linked companion
+`sessions` row.
+
+`POST /exports/session` remains available only as a dev-only local artifact
+dump. It is no longer the primary mobile upload path.
 
 ---
 
