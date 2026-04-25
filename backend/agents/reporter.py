@@ -11,7 +11,7 @@ from schemas.session import (
     ReinjuryRiskOutput, ReporterOutput,
 )
 from agents.hipaa import hipaa_wrap
-from agents._client import llm_client as _client, MODEL as _MODEL
+from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.messages import ReporterRequest, ReporterResponse
 from utils.audit import write_audit
 

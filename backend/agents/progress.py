@@ -8,7 +8,7 @@ from uagents import Agent, Context
 from db.models import Summary, AccumulatedScore, SessionScore, Session as SessionModel
 from schemas.session import ProgressOutput
 from agents.hipaa import hipaa_wrap
-from agents._client import llm_client as _client, MODEL as _MODEL
+from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.messages import ProgressRequest, ProgressResponse
 from utils.audit import write_audit
 

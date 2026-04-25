@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uagents import Agent, Context
 from schemas.session import IntakeInput, IntakeOutput
 from agents.hipaa import hipaa_wrap
-from agents._client import llm_client as _client, MODEL as _MODEL
+from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.messages import IntakeRequest, IntakeResponse
 from utils.audit import write_audit
 

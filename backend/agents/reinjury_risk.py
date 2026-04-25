@@ -8,7 +8,7 @@ from uagents import Agent, Context
 from db.models import SessionScore, Session
 from schemas.session import PoseAnalysisOutput, ReinjuryRiskOutput
 from agents.hipaa import hipaa_wrap
-from agents._client import llm_client as _client, MODEL as _MODEL
+from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.messages import ReinjuryRiskRequest, ReinjuryRiskResponse
 from utils.audit import write_audit
 

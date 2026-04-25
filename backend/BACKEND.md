@@ -15,6 +15,7 @@ backend/
 ├── alembic.ini              Alembic config
 │
 ├── agents/
+│   ├── _client.py           Shared Gemini LLM client (OpenAI-compatible endpoint)
 │   ├── messages.py          Typed uagents.Model message classes
 │   ├── agentverse_agent.py  Orchestrator uAgent (mailbox, ctx.send dispatch)
 │   ├── bureau.py            Assembles all uAgents into one Bureau
@@ -25,6 +26,7 @@ backend/
 │   ├── reinjury_risk.py     Re-injury risk trend
 │   ├── reporter.py          Session summary + recommendations
 │   ├── progress.py          Longitudinal report (triggers at ≥3 sessions)
+│   ├── exercise_reporter.py Direct clinical pipeline for mobile exercise sessions
 │   └── hipaa.py             PHI redaction wrapper (Presidio + audit write)
 │
 ├── db/
@@ -54,6 +56,7 @@ backend/
 │
 └── utils/
     ├── audit.py             write_audit() — appends to audit_log table
+    ├── frame_csv.py         parse_frame_features_csv() — CSV → PoseFrame rows
     └── phi_scanner.py       Presidio scan_and_redact() helper
 ```
 
@@ -226,7 +229,7 @@ Clinical guidelines (PDFs) are embedded at startup via `rag/loader.py`:
 - Vector store: ChromaDB persistent client at `CHROMA_PERSIST_DIR`
 - Index: LlamaIndex `VectorStoreIndex` wrapping the Chroma collection `clinical_guidelines`
 
-At query time, `retrieve_clinical_context(query, top_k=5)` retrieves the top-5 most relevant chunks. Agents (primarily `reporter` and `fall_risk`) prepend this context to their OpenAI prompts.
+At query time, `retrieve_clinical_context(query, top_k=5)` retrieves the top-5 most relevant chunks. Agents (primarily `reporter` and `fall_risk`) prepend this context to their LLM prompts.
 
 The index is built once on first load and cached in-process. Re-ingest by deleting the `chroma_db/` directory and restarting.
 
@@ -248,7 +251,8 @@ The `/exports/session` endpoint also uses `DEV_MODE` as its gate — it returns 
 | Variable | Default | Required in prod | Description |
 |----------|---------|-----------------|-------------|
 | `DATABASE_URL` | `sqlite+aiosqlite:///./sentinel_dev.db` | Yes | PostgreSQL async URL for production — `postgresql+asyncpg://user:pass@host:5432/db` |
-| `OPENAI_API_KEY` | — | Yes | Used by all agents (model: `gpt-4o`) |
+| `OPENAI_API_KEY` | `""` | Yes | Used by general agents: intake, fall_risk, reinjury_risk, reporter, progress (model: `gpt-4o`) |
+| `GEMINI_API_KEY` | `""` | Yes | Used by `exercise_reporter` for clinical biomechanics analysis (model: `gemini-2.0-flash`). Get one at [aistudio.google.com](https://aistudio.google.com). |
 | `JWT_SECRET` | `dev-secret-change-in-prod` | Yes | Signing secret for HS256 JWT tokens |
 | `CHROMA_PERSIST_DIR` | `./chroma_db` | Yes | Filesystem path for ChromaDB persistence |
 | `AGENTVERSE_MAILBOX_KEY` | `""` | If using Agentverse | Fetch.ai mailbox key — get one at agentverse.ai |
@@ -275,6 +279,7 @@ Railway builds from `backend/Dockerfile`. The `releaseCommand` in `railway.toml`
    ```
    DATABASE_URL=postgresql+asyncpg://...
    OPENAI_API_KEY=sk-...
+   GEMINI_API_KEY=AIza...
    JWT_SECRET=<random 64-char string>
    CHROMA_PERSIST_DIR=/app/chroma_db
    AGENTVERSE_MAILBOX_KEY=<key from agentverse.ai>   # optional

@@ -26,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.hipaa import hipaa_wrap
-from agents._client import llm_client as _client, MODEL as _MODEL
+from agents._client import gemini_client as _client, GEMINI_MODEL as _MODEL
 from db.models import Session, SessionScore, Summary
 from rag.retriever import retrieve_clinical_context
 from schemas.exercise import ExerciseSessionResult

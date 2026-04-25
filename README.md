@@ -59,9 +59,9 @@ npx react-native run-ios   # or run-android
 
 ```bash
 cd backend
-cp .env.example .env       # fill in OPENAI_API_KEY at minimum
+cp .env.example .env       # fill in GEMINI_API_KEY at minimum
 uv sync                    # install dependencies (uses uv lockfile)
-python run_agent.py        # starts FastAPI (port 8000) + Fetch.ai Bureau
+uv run python run_agent.py # starts FastAPI (port 8000) + Fetch.ai Bureau
 ```
 
 API available at `http://localhost:8000`. Docs at `/docs`.
@@ -155,7 +155,8 @@ Every agent output passes through the **HIPAA middleware** (`hipaa_wrap`) which:
 See `backend/.env.example` for all required variables:
 
 - `DATABASE_URL` — PostgreSQL async URL (`postgresql+asyncpg://...`)
-- `OPENAI_API_KEY` — OpenAI API key (used by all agents, model `gpt-4o`)
+- `OPENAI_API_KEY` — OpenAI API key (used by general agents: intake, fall risk, reinjury risk, reporter, progress — model `gpt-4o`)
+- `GEMINI_API_KEY` — Google Gemini API key (used by `exercise_reporter` for clinical biomechanics analysis — model `gemini-2.0-flash`). Get one at [aistudio.google.com](https://aistudio.google.com).
 - `JWT_SECRET` — Secret for signing JWT tokens
 - `CHROMA_PERSIST_DIR` — Path to ChromaDB persistence directory
 - `AGENTVERSE_MAILBOX_KEY` — Fetch.ai Agentverse mailbox key for the orchestrator agent (get one at agentverse.ai)
@@ -174,7 +175,8 @@ The `backend/Dockerfile` and `backend/railway.toml` handle the build. Before dep
 | Variable | Notes |
 |----------|-------|
 | `DATABASE_URL` | `postgresql+asyncpg://...` — use Railway's PostgreSQL plugin URL, rewritten to the asyncpg scheme |
-| `OPENAI_API_KEY` | Required by all agents |
+| `OPENAI_API_KEY` | General agents (intake, fall risk, reinjury risk, reporter, progress) |
+| `GEMINI_API_KEY` | `exercise_reporter` agent — Google AI Studio key |
 | `JWT_SECRET` | Random 64-char string |
 | `CHROMA_PERSIST_DIR` | `/app/chroma_db` — mount a Railway volume here for persistence across deploys |
 | `AGENTVERSE_MAILBOX_KEY` | Optional — enables the Fetch.ai Agentverse path |
