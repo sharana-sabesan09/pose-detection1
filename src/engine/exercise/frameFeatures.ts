@@ -159,6 +159,15 @@ function kneeOffset(leg: LegLandmarks): number {
   return Math.abs(leg.knee.x - leg.foot.x);
 }
 
+/**
+ * Foot height (y-coordinate). Lower value = foot is higher on screen = lifted.
+ * Used to detect unilateral / single-leg exercises where one foot is grounded
+ * and the other is lifted.
+ */
+function footHeight(leg: LegLandmarks): number {
+  return leg.foot.y;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Trunk + pelvis (frame-shared)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -218,7 +227,25 @@ export function computeFrameFeatures(
   const rightLeg = legFor('right', normalized);
   const leftVis  = legVisibility(leftLeg);
   const rightVis = legVisibility(rightLeg);
-  const dominantSide: Side = leftVis >= rightVis ? 'left' : 'right';
+
+  // Foot height: lower y = higher on screen = lifted.
+  // For unilateral exercises, pick the lifted foot's side (the working leg).
+  // For bilateral, both feet are at similar height → fall back to visibility.
+  const leftFootY  = footHeight(leftLeg);
+  const rightFootY = footHeight(rightLeg);
+  const footHeightDiff = rightFootY - leftFootY; // positive = left foot higher (lifted)
+
+  // If one foot is noticeably lifted (>0.1 pelvis-widths), that's the working leg.
+  // Otherwise, pick based on visibility (what the camera sees best).
+  let dominantSide: Side;
+  if (Math.abs(footHeightDiff) > 0.1) {
+    // Unilateral: left foot lifted if footHeightDiff > 0
+    dominantSide = footHeightDiff > 0 ? 'left' : 'right';
+  } else {
+    // Bilateral or neutral: use visibility
+    dominantSide = leftVis >= rightVis ? 'left' : 'right';
+  }
+
   const dominantLeg = dominantSide === 'left' ? leftLeg : rightLeg;
   const dominantVis = dominantSide === 'left' ? leftVis : rightVis;
 

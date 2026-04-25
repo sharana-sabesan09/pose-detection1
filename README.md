@@ -65,9 +65,9 @@ alembic upgrade head
 python run_agent.py
 ```
 
-API available at `http://localhost:8000`. Docs at `/docs`.
+API available at `http://localhost:8081`. Docs at `/docs`.
 
-`python run_agent.py` starts both the FastAPI server (port 8000) and the Fetch.ai Bureau (all 7 uAgents) in one process.
+`python run_agent.py` starts both the FastAPI server (port 8081) and the Fetch.ai Bureau (all 7 uAgents) in one process.
 
 ---
 
