@@ -1,14 +1,19 @@
 import json
+import logging
+import uuid
+from datetime import datetime
 from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from uagents import Agent, Context
 from config import settings
 from db.models import SessionScore, Session
 from schemas.session import PoseAnalysisOutput, ReinjuryRiskOutput
 from agents.hipaa import hipaa_wrap
+from agents.messages import ReinjuryRiskRequest, ReinjuryRiskResponse
 from utils.audit import write_audit
-import uuid
-from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 _MODEL = "gpt-4o"
@@ -96,3 +101,25 @@ Output only valid JSON."""
 
     await write_audit("reinjury_risk_agent", "assess_reinjury_risk", patient_id, "reinjury_risk_score", db)
     return output
+
+
+reinjury_agent = Agent(name="reinjury-risk-agent", seed="physio-reinjury-risk-agent-sentinel-v1")
+
+
+@reinjury_agent.on_message(model=ReinjuryRiskRequest)
+async def _handle_reinjury_risk(ctx: Context, sender: str, msg: ReinjuryRiskRequest):
+    from db.session import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            pose = PoseAnalysisOutput(**msg.pose)
+            output = await run_reinjury_risk(msg.patient_id, msg.session_id, pose, db)
+            await ctx.send(sender, ReinjuryRiskResponse(
+                session_id=msg.session_id, **output.model_dump()
+            ))
+    except Exception as e:
+        logger.error("reinjury_risk uagent error: %s", e)
+        await ctx.send(sender, ReinjuryRiskResponse(
+            session_id=msg.session_id,
+            score=0.0, trend="unknown", reasoning="",
+            error=str(e),
+        ))

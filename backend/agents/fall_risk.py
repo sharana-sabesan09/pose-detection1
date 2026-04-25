@@ -1,15 +1,20 @@
 import json
+import logging
+import uuid
+from datetime import datetime
 from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from uagents import Agent, Context
 from config import settings
 from db.models import SessionScore
 from schemas.session import IntakeOutput, PoseAnalysisOutput, FallRiskOutput
 from rag.retriever import retrieve_clinical_context
 from agents.hipaa import hipaa_wrap
+from agents.messages import FallRiskRequest, FallRiskResponse
 from utils.audit import write_audit
-import uuid
-from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 _MODEL = "gpt-4o"
@@ -93,3 +98,26 @@ Output only valid JSON."""
 
     await write_audit("fall_risk_agent", "assess_fall_risk", patient_id, "fall_risk_score", db)
     return output
+
+
+fall_risk_agent = Agent(name="fall-risk-agent", seed="physio-fall-risk-agent-sentinel-v1")
+
+
+@fall_risk_agent.on_message(model=FallRiskRequest)
+async def _handle_fall_risk(ctx: Context, sender: str, msg: FallRiskRequest):
+    from db.session import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            intake = IntakeOutput(**msg.intake)
+            pose = PoseAnalysisOutput(**msg.pose)
+            output = await run_fall_risk(intake, pose, msg.patient_id, msg.session_id, db)
+            await ctx.send(sender, FallRiskResponse(
+                session_id=msg.session_id, **output.model_dump()
+            ))
+    except Exception as e:
+        logger.error("fall_risk uagent error: %s", e)
+        await ctx.send(sender, FallRiskResponse(
+            session_id=msg.session_id,
+            score=0.0, risk_level="unknown", reasoning="", contributing_factors=[],
+            error=str(e),
+        ))

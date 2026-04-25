@@ -1,14 +1,19 @@
 import json
+import logging
 import uuid
-from openai import AsyncOpenAI
 from datetime import datetime
+from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from uagents import Agent, Context
 from config import settings
 from db.models import Summary, AccumulatedScore, SessionScore, Session as SessionModel
 from schemas.session import ProgressOutput
 from agents.hipaa import hipaa_wrap
+from agents.messages import ProgressRequest, ProgressResponse
 from utils.audit import write_audit
+
+logger = logging.getLogger(__name__)
 
 _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 _MODEL = "gpt-4o"
@@ -128,3 +133,25 @@ Output only valid JSON."""
     await db.commit()
     await write_audit("progress_agent", "generate_progress_report", patient_id, "progress_output", db)
     return output
+
+
+progress_agent = Agent(name="progress-agent", seed="physio-progress-agent-sentinel-v1")
+
+
+@progress_agent.on_message(model=ProgressRequest)
+async def _handle_progress(ctx: Context, sender: str, msg: ProgressRequest):
+    from db.session import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            output = await run_progress(msg.patient_id, db)
+            await ctx.send(sender, ProgressResponse(
+                patient_id=msg.patient_id, **output.model_dump()
+            ))
+    except Exception as e:
+        logger.error("progress uagent error: %s", e)
+        await ctx.send(sender, ProgressResponse(
+            patient_id=msg.patient_id,
+            longitudinal_report="", overall_trend="unknown",
+            milestones_reached=[], next_goals=[],
+            error=str(e),
+        ))

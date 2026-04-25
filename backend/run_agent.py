@@ -1,8 +1,7 @@
-import asyncio
 import threading
 import uvicorn
 from main import app
-from agents.agentverse_agent import physio_agent
+from agents.bureau import bureau
 
 
 def run_fastapi():
@@ -13,4 +12,4 @@ if __name__ == "__main__":
     api_thread = threading.Thread(target=run_fastapi, daemon=True)
     api_thread.start()
 
-    physio_agent.run()
+    bureau.run()

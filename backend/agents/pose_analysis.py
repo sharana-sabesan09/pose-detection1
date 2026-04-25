@@ -1,10 +1,15 @@
 import math
+import logging
 import statistics
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from uagents import Agent, Context
 from db.models import PoseFrame
 from schemas.session import PoseAnalysisOutput
+from agents.messages import PoseRequest, PoseResponse
 from utils.audit import write_audit
+
+logger = logging.getLogger(__name__)
 
 # Expected ROM ranges per joint (degrees)
 _EXPECTED_ROM = {
@@ -69,3 +74,24 @@ async def run_pose_analysis(session_id: str, db: AsyncSession) -> PoseAnalysisOu
 
     await write_audit("pose_analysis_agent", "analyze_session", None, "pose_analysis", db)
     return output
+
+
+pose_agent = Agent(name="pose-analysis-agent", seed="physio-pose-analysis-agent-sentinel-v1")
+
+
+@pose_agent.on_message(model=PoseRequest)
+async def _handle_pose(ctx: Context, sender: str, msg: PoseRequest):
+    from db.session import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            output = await run_pose_analysis(msg.session_id, db)
+            await ctx.send(sender, PoseResponse(
+                session_id=msg.session_id, **output.model_dump()
+            ))
+    except Exception as e:
+        logger.error("pose_analysis uagent error: %s", e)
+        await ctx.send(sender, PoseResponse(
+            session_id=msg.session_id,
+            rom_score=0.0, joint_stats={}, flagged_joints=[],
+            error=str(e),
+        ))

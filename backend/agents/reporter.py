@@ -1,9 +1,11 @@
 import json
+import logging
 import uuid
-from openai import AsyncOpenAI
 from datetime import datetime
+from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from uagents import Agent, Context
 from config import settings
 from db.models import Summary, SessionScore, Session
 from schemas.session import (
@@ -11,7 +13,10 @@ from schemas.session import (
     ReinjuryRiskOutput, ReporterOutput,
 )
 from agents.hipaa import hipaa_wrap
+from agents.messages import ReporterRequest, ReporterResponse
 from utils.audit import write_audit
+
+logger = logging.getLogger(__name__)
 
 _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 _MODEL = "gpt-4o"
@@ -118,3 +123,31 @@ Output only valid JSON."""
     await db.commit()
     await write_audit("reporter_agent", "generate_report", patient_id, "session_report", db)
     return output
+
+
+reporter_agent = Agent(name="reporter-agent", seed="physio-reporter-agent-sentinel-v1")
+
+
+@reporter_agent.on_message(model=ReporterRequest)
+async def _handle_reporter(ctx: Context, sender: str, msg: ReporterRequest):
+    from db.session import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            output = await run_reporter(
+                msg.session_id, msg.patient_id,
+                IntakeOutput(**msg.intake),
+                PoseAnalysisOutput(**msg.pose),
+                FallRiskOutput(**msg.fall_risk),
+                ReinjuryRiskOutput(**msg.reinjury_risk),
+                db,
+            )
+            await ctx.send(sender, ReporterResponse(
+                session_id=msg.session_id, **output.model_dump()
+            ))
+    except Exception as e:
+        logger.error("reporter uagent error: %s", e)
+        await ctx.send(sender, ReporterResponse(
+            session_id=msg.session_id,
+            summary="", session_highlights=[], recommendations=[],
+            error=str(e),
+        ))
