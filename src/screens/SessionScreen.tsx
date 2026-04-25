@@ -35,6 +35,12 @@ import {
   saveAnalysis,
   RecordedFrame,
 } from '../engine/analyzeRecording';
+import {
+  writeRecordingCsv,
+  writeRepsCsvForSession,
+  writeSessionSummaryJson,
+} from '../engine/csvLogger';
+import { ExercisePipeline } from '../engine/exercise/pipeline';
 import ScoreDashboard from '../components/ScoreDashboard';
 import { POSE_HTML } from '../engine/poseHtml';
 
@@ -77,6 +83,9 @@ export default function SessionScreen() {
   const profileRef      = useRef<UserProfile | null>(null);
   const detectorsRef    = useRef(new PoseDetectors());
   const recordStateRef  = useRef(recordState);
+  // Exercise pipeline: instantiated fresh on each recording start so reps
+  // detected in the previous run don't bleed into the next.
+  const pipelineRef     = useRef<ExercisePipeline | null>(null);
 
   useEffect(() => { recordStateRef.current = recordState; }, [recordState]);
 
@@ -131,7 +140,12 @@ export default function SessionScreen() {
       const pose = msg.landmarks as PoseFrame;
 
       if (recordStateRef.current === 'recording') {
-        recordingFrames.current.push({ t: Date.now(), pose });
+        const t = Date.now();
+        recordingFrames.current.push({ t, pose });
+        // Feed the rep-detection pipeline. Per-rep events are produced on
+        // rep end; we just collect them via pipelineRef.current.getReps()
+        // when the recording stops.
+        pipelineRef.current?.onFrame(t, pose);
       }
 
       detectorsRef.current.update(pose, mode);
@@ -145,10 +159,11 @@ export default function SessionScreen() {
   // ── Start recording ───────────────────────────────────────────────────────
   const startRecording = useCallback(() => {
     recordingFrames.current = [];
+    pipelineRef.current = new ExercisePipeline('squat');
     setRecordState('recording');
   }, []);
 
-  // ── Finish recording: analyze + save + navigate ───────────────────────────
+  // ── Finish recording: analyze + save + persist raw CSV + navigate ─────────
   const finishRecording = useCallback(async () => {
     setRecordState('analyzing');
 
@@ -158,10 +173,42 @@ export default function SessionScreen() {
     const result = analyzeRecording(frames, demographicRisk);
     await saveAnalysis(result);
 
+    // Persist every raw landmark frame to a CSV file in the app's Documents
+    // directory. result.id is an ISO timestamp string, so it's unique per run
+    // and matches the analysis entry shown on the dashboard.
+    if (frames.length > 0) {
+      try {
+        const path = await writeRecordingCsv(result.id, frames, mode);
+        console.log(`[SessionScreen] raw frames CSV saved → ${path}`);
+      } catch (e) {
+        console.warn('[SessionScreen] failed to write CSV:', (e as Error).message);
+      }
+    }
+
+    // Persist the per-rep CSV + session summary from the exercise pipeline.
+    const pipe = pipelineRef.current;
+    if (pipe) {
+      try {
+        const session = pipe.finalize();
+        if (session.reps.length > 0) {
+          const repsPath = await writeRepsCsvForSession(result.id, session.reps);
+          const jsonPath = await writeSessionSummaryJson(result.id, session);
+          console.log(
+            `[SessionScreen] ${session.reps.length} reps → ${repsPath}, summary → ${jsonPath}`,
+          );
+        } else {
+          console.log('[SessionScreen] exercise pipeline detected 0 reps');
+        }
+      } catch (e) {
+        console.warn('[SessionScreen] failed to write reps CSV:', (e as Error).message);
+      }
+    }
+
     setRecordState('idle');
     recordingFrames.current = [];
+    pipelineRef.current = null;
     navigation.navigate('Results');
-  }, [navigation]);
+  }, [navigation, mode]);
 
   // ── Reset profile ─────────────────────────────────────────────────────────
   const handleReset = () => {
