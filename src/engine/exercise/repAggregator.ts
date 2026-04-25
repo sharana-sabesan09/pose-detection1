@@ -38,7 +38,6 @@ export class RepAggregator {
   private side: Side = 'left';
   private startFrame: FrameFeatures | null = null;
   private bottomFrame: FrameFeatures | null = null;
-  private nextRepId = 1;
 
   /** Called on every absolute frame index regardless of state, for bookkeeping. */
   private absIdx = 0;
@@ -129,7 +128,7 @@ export class RepAggregator {
     const score  = computeScore(errors);
 
     const rep: RepFeatures = {
-      repId: this.nextRepId++,
+      repId: 0, // assigned by pipeline after the depth filter passes
       side:  this.side,
       timing: {
         startFrame:  this.startFrameAbsIdx,

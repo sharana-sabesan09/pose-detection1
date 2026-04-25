@@ -11,3 +11,9 @@
 
 export const PERSONAL_ACCESS_KEY = 'YOUR_ZETIC_PERSONAL_ACCESS_KEY';
 export const POSE_MODEL_KEY      = 'YOUR_ZETIC_MEDIAPIPE_POSE_MODEL_KEY';
+
+// Your laptop's LAN IP + Metro port (8081 by default). End-of-recording
+// session artifacts POST here and land in <repo>/exports/. Use
+// 'ipconfig getifaddr en0' on macOS to find the IP. Use port 8000 instead
+// if you're running the FastAPI backend. Set to '' to disable.
+export const BACKEND_URL         = 'http://YOUR_LAPTOP_IP:8081';

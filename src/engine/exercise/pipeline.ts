@@ -99,7 +99,10 @@ export class ExercisePipeline {
     if (events.repEnd) {
       const rep = this.aggregator.finalizeRep(this.lastWindowStats, this.absFrameIdx);
       // Reject reps that never reached real depth.
+      // ID is assigned HERE (not inside the aggregator) so only reps that
+      // pass this gate get an ID — no gaps from rejected shallow reps.
       if (rep && rep.features.kneeFlexionDeg >= REP_THRESHOLDS.MIN_REP_DEPTH_DEG) {
+        rep.repId = this.reps.length + 1;
         this.reps.push(rep);
         finishedRep = rep;
       }

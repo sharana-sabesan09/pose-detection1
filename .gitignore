@@ -32,3 +32,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Session artifacts written by the phone via /exports/session
+exports/
