@@ -2,7 +2,7 @@
  * src/screens/SessionScreen.tsx — LIVE SESSION (TAB 1)
  *
  * DATA PIPELINE:
- *   VisionCamera → usePose (TF.js MoveNet) → pose state
+ *   MediaPipe WebView → postMessage → onMessage
  *     → PoseDetectors → aggregateScores → ScoreDashboard (live scores)
  *     → recordingBuffer (when recording) → analyzeRecording → Dashboard
  *
@@ -19,7 +19,7 @@ import {
   View, Text, TouchableOpacity, StyleSheet,
   SafeAreaView, Platform, Alert,
 } from 'react-native';
-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import WebView, { WebViewMessageEvent } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
@@ -27,7 +27,7 @@ import { CompositeNavigationProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { MainTabParamList } from '../navigation/MainTabs';
-import { SessionMode, UserProfile, RiskScores } from '../types';
+import { SessionMode, PoseFrame, UserProfile, RiskScores } from '../types';
 import { PoseDetectors } from '../engine/detectors';
 import { aggregateScores } from '../engine/scoreAggregator';
 import {
@@ -36,7 +36,7 @@ import {
   RecordedFrame,
 } from '../engine/analyzeRecording';
 import ScoreDashboard from '../components/ScoreDashboard';
-import { usePose } from '../engine/usePose';
+import { POSE_HTML } from '../engine/poseHtml';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS + TYPES
@@ -66,30 +66,19 @@ export default function SessionScreen() {
   const [mode,        setMode]        = useState<SessionMode>('standing');
   const [scores,      setScores]      = useState<RiskScores>(DEFAULT_SCORES);
   const [initialized, setInitialized] = useState(false);
-  const [cameraActive, setCameraActive] = useState(false);
+  const [webViewActive, setWebViewActive] = useState(false);
 
   // ── Recording state ───────────────────────────────────────────────────────
   const [recordState, setRecordState]   = useState<'idle' | 'recording' | 'analyzing'>('idle');
   const [timeLeft,    setTimeLeft]      = useState(MAX_RECORD_SEC);
 
   const recordingFrames = useRef<RecordedFrame[]>([]);
+  const webViewRef      = useRef<WebView>(null);
   const profileRef      = useRef<UserProfile | null>(null);
   const detectorsRef    = useRef(new PoseDetectors());
   const recordStateRef  = useRef(recordState);
 
-  // keep ref in sync so the pose effect always sees the latest recordState
   useEffect(() => { recordStateRef.current = recordState; }, [recordState]);
-
-  // ── VisionCamera setup ────────────────────────────────────────────────────
-  const device = useCameraDevice('back');
-  const { hasPermission, requestPermission } = useCameraPermission();
-
-  useEffect(() => {
-    if (!hasPermission) requestPermission();
-  }, [hasPermission, requestPermission]);
-
-  // ── Pose detection hook ───────────────────────────────────────────────────
-  const { cameraRef, onCameraStarted, pose, status } = usePose();
 
   // ── Load user profile once ────────────────────────────────────────────────
   useEffect(() => {
@@ -98,34 +87,13 @@ export default function SessionScreen() {
     });
   }, []);
 
-  // ── Camera on/off with screen focus ──────────────────────────────────────
+  // ── WebView on/off with screen focus ──────────────────────────────────────
   useFocusEffect(
     useCallback(() => {
-      setCameraActive(true);
-      return () => setCameraActive(false);
+      setWebViewActive(true);
+      return () => setWebViewActive(false);
     }, [])
   );
-
-  // ── Process each new pose frame ───────────────────────────────────────────
-  useEffect(() => {
-    if (!pose) return;
-
-    if (recordStateRef.current === 'recording') {
-      recordingFrames.current.push({ t: Date.now(), pose });
-    }
-
-    detectorsRef.current.update(pose, mode);
-    const demographicRisk = profileRef.current?.demographicRiskScore ?? 0;
-    setScores(aggregateScores(detectorsRef.current.measurements, demographicRisk));
-    if (!initialized) setInitialized(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pose]);
-
-  // ── Mode change: reset detector buffers ──────────────────────────────────
-  const handleModeChange = useCallback((newMode: SessionMode) => {
-    detectorsRef.current.reset();
-    setMode(newMode);
-  }, []);
 
   // ── Countdown timer while recording ──────────────────────────────────────
   useEffect(() => {
@@ -147,6 +115,32 @@ export default function SessionScreen() {
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recordState]);
+
+  // ── Mode change: reset detector buffers ──────────────────────────────────
+  const handleModeChange = useCallback((newMode: SessionMode) => {
+    detectorsRef.current.reset();
+    setMode(newMode);
+  }, []);
+
+  // ── Receive landmarks from MediaPipe WebView ──────────────────────────────
+  const onMessage = useCallback((event: WebViewMessageEvent) => {
+    try {
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type !== 'pose' || !Array.isArray(msg.landmarks)) return;
+
+      const pose = msg.landmarks as PoseFrame;
+
+      if (recordStateRef.current === 'recording') {
+        recordingFrames.current.push({ t: Date.now(), pose });
+      }
+
+      detectorsRef.current.update(pose, mode);
+      const demographicRisk = profileRef.current?.demographicRiskScore ?? 0;
+      setScores(aggregateScores(detectorsRef.current.measurements, demographicRisk));
+      if (!initialized) setInitialized(true);
+
+    } catch { /* ignore malformed messages */ }
+  }, [mode, initialized]);
 
   // ── Start recording ───────────────────────────────────────────────────────
   const startRecording = useCallback(() => {
@@ -190,15 +184,19 @@ export default function SessionScreen() {
   return (
     <View style={styles.root}>
 
-      {/* ── FULL-SCREEN CAMERA ────────────────────────────────────────── */}
-      {device && hasPermission && cameraActive && (
-        <Camera
-          ref={cameraRef}
+      {/* ── FULL-SCREEN MEDIAPIPE WEBVIEW ─────────────────────────────── */}
+      {webViewActive && (
+        <WebView
+          ref={webViewRef}
           style={StyleSheet.absoluteFill}
-          device={device}
-          isActive={cameraActive}
-          photo={true}
-          onStarted={onCameraStarted}
+          source={{ html: POSE_HTML, baseUrl: 'https://localhost' }}
+          allowsInlineMediaPlayback
+          mediaPlaybackRequiresUserAction={false}
+          mediaCapturePermissionGrantType="grant"
+          originWhitelist={['*']}
+          mixedContentMode="always"
+          javaScriptEnabled
+          onMessage={onMessage}
         />
       )}
 
@@ -208,7 +206,7 @@ export default function SessionScreen() {
         {/* ── TOP BAR ──────────────────────────────────────────────────── */}
         <View style={styles.topBar}>
           <Text style={styles.title}>SENTINEL</Text>
-          <StatusPill status={status} ready={initialized} />
+          <StatusPill ready={initialized} />
           <TouchableOpacity style={styles.resetBtn} onPress={handleReset}>
             <Text style={styles.resetBtnText}>Reset</Text>
           </TouchableOpacity>
@@ -280,9 +278,9 @@ function RecordButton({
 // STATUS PILL + MODE SELECTOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-function StatusPill({ status, ready }: { status: string; ready: boolean }) {
-  const color = ready ? '#00c853' : status === 'error' ? '#f44336' : '#f0a500';
-  const label = ready ? 'LIVE' : status === 'error' ? 'ERROR' : 'LOADING';
+function StatusPill({ ready }: { ready: boolean }) {
+  const color = ready ? '#00c853' : '#f0a500';
+  const label = ready ? 'LIVE' : 'LOADING';
   return (
     <View style={[styles.pill, { backgroundColor: color + '33' }]}>
       <View style={[styles.dot, { backgroundColor: color }]} />
@@ -348,48 +346,25 @@ const styles = StyleSheet.create({
 
   recordBar: {
     backgroundColor: 'rgba(13,27,42,0.92)',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    borderTopWidth: 1,
-    borderTopColor: C.border,
+    paddingHorizontal: 12, paddingVertical: 10,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    borderTopWidth: 1, borderTopColor: C.border,
   },
   recordBtn: {
-    flex: 1,
-    backgroundColor: 'rgba(0,212,255,0.08)',
-    borderWidth: 1,
-    borderColor: C.accent,
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: 'center',
+    flex: 1, backgroundColor: 'rgba(0,212,255,0.08)',
+    borderWidth: 1, borderColor: C.accent,
+    borderRadius: 10, paddingVertical: 10, alignItems: 'center',
   },
-  recordBtnText: { color: C.accent, fontSize: 14, fontWeight: '700' },
-  countdownBadge: {
-    backgroundColor: '#f44336',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    minWidth: 48,
-    alignItems: 'center',
-  },
+  recordBtnText:  { color: C.accent, fontSize: 14, fontWeight: '700' },
+  countdownBadge: { backgroundColor: '#f44336', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, minWidth: 48, alignItems: 'center' },
   countdownText:  { color: '#fff', fontSize: 16, fontWeight: '800' },
   recordingLabel: { flex: 1, color: '#f44336', fontSize: 12, fontWeight: '600' },
-  stopBtn: {
-    backgroundColor: 'rgba(244,67,54,0.15)',
-    borderWidth: 1,
-    borderColor: '#f44336',
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  stopBtnText:   { color: '#f44336', fontSize: 13, fontWeight: '700' },
-  analyzingText: { flex: 1, color: C.accent, fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  stopBtn:        { backgroundColor: 'rgba(244,67,54,0.15)', borderWidth: 1, borderColor: '#f44336', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
+  stopBtnText:    { color: '#f44336', fontSize: 13, fontWeight: '700' },
+  analyzingText:  { flex: 1, color: C.accent, fontSize: 13, fontWeight: '600', textAlign: 'center' },
 
   modeBar: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(13,27,42,0.95)',
+    flexDirection: 'row', backgroundColor: 'rgba(13,27,42,0.95)',
     paddingHorizontal: 12, paddingVertical: 10, gap: 10,
     paddingBottom: Platform.OS === 'ios' ? 4 : 10,
   },
