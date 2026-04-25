@@ -1,0 +1,61 @@
+# Resolve react_native_pods.rb with node to allow for hoisting
+require Pod::Executable.execute_command('node', ['-p',
+  'require.resolve(
+    "react-native/scripts/react_native_pods.rb",
+    {paths: [process.argv[1]]},
+  )', __dir__]).strip
+
+platform :ios, min_ios_version_supported
+prepare_react_native_project!
+
+linkage = ENV['USE_FRAMEWORKS']
+if linkage != nil
+  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
+  use_frameworks! :linkage => linkage.to_sym
+end
+
+target 'zeticllmreactnativetemplate' do
+  config = use_native_modules!
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    # https://github.com/facebook/react-native/blob/main/packages/react-native/scripts/react_native_pods.rb#L197-L202
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      # :ccache_enabled => true
+    )
+
+    # Force every pod to use the same minimum iOS deployment target as the app.
+    # Without this, pods that don't declare their own target inherit a default
+    # that may be older than iOS 13 — causing errors like
+    # "'UIWindowScene' is only available in iOS 13.0 or newer" in VisionCamera.
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        current = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+        # Only raise the target, never lower it — some pods legitimately need higher.
+        if current.nil? || current.to_f < 15.1
+          config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'
+        end
+      end
+    end
+
+    # Patch fmt base.h: disable consteval for all Apple Clang versions because
+    # consteval is broken when used with FMT_STRING's local struct types.
+    fmt_base = "#{installer.sandbox.root}/fmt/include/fmt/base.h"
+    if File.exist?(fmt_base)
+      content = File.read(fmt_base)
+      patched = content.gsub(
+        /^#elif defined\(__apple_build_version__\) && __apple_build_version__ < 14000029L\n#  define FMT_USE_CONSTEVAL 0.*consteval is broken in Apple clang < 14\./,
+        "#elif defined(__apple_build_version__)\n#  define FMT_USE_CONSTEVAL 0  // consteval is broken in Apple clang with local types."
+      )
+      File.write(fmt_base, patched) if patched != content
+    end
+  end
+end
