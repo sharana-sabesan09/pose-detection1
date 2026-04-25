@@ -2,3 +2,19 @@ node_modules/
 .vscode/
 .DS_Store
 .idea/
+
+# iOS generated
+ios/Pods/
+ios/build/
+ios/DerivedData/
+
+# Android generated
+android/build/
+android/.gradle/
+android/app/build/
+
+# Metro
+.metro-health-check*
+
+# Build artifacts
+*.jsbundle
