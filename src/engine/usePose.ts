@@ -34,6 +34,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type { Camera } from 'react-native-vision-camera';
 import * as tf from '@tensorflow/tfjs-core';
 import { setPlatform } from '@tensorflow/tfjs-core';
 import '@tensorflow/tfjs-backend-cpu';
@@ -47,12 +48,8 @@ import { PoseFrame } from '../types';
 
 export type PoseStatus = 'initialising' | 'ready' | 'error';
 
-interface CameraHandle {
-  takePhoto(): Promise<{ path: string }>;
-}
-
 export interface UsePoseReturn {
-  cameraRef:       React.RefObject<CameraHandle | null>;
+  cameraRef:       React.RefObject<Camera | null>;
   onCameraStarted: () => void;
   pose:            PoseFrame | null;
   status:          PoseStatus;
@@ -107,7 +104,7 @@ const FRAME_INTERVAL_MS = 100;
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function usePose(): UsePoseReturn {
-  const cameraRef = useRef<CameraHandle>(null);
+  const cameraRef = useRef<Camera>(null);
   const [pose, setPose] = useState<PoseFrame | null>(null);
   const [status, setStatus] = useState<PoseStatus>('initialising');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);

@@ -2,7 +2,7 @@
  * src/screens/SessionScreen.tsx — LIVE SESSION (TAB 1)
  *
  * DATA PIPELINE:
- *   MediaPipe WebView → postMessage → onMessage
+ *   VisionCamera → usePose (TF.js MoveNet) → pose state
  *     → PoseDetectors → aggregateScores → ScoreDashboard (live scores)
  *     → recordingBuffer (when recording) → analyzeRecording → Dashboard
  *
@@ -19,7 +19,7 @@ import {
   View, Text, TouchableOpacity, StyleSheet,
   SafeAreaView, Platform, Alert,
 } from 'react-native';
-import WebView, { WebViewMessageEvent } from 'react-native-webview';
+import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
@@ -27,7 +27,7 @@ import { CompositeNavigationProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { MainTabParamList } from '../navigation/MainTabs';
-import { SessionMode, PoseFrame, UserProfile, RiskScores } from '../types';
+import { SessionMode, UserProfile, RiskScores } from '../types';
 import { PoseDetectors } from '../engine/detectors';
 import { aggregateScores } from '../engine/scoreAggregator';
 import {
@@ -36,20 +36,13 @@ import {
   RecordedFrame,
 } from '../engine/analyzeRecording';
 import ScoreDashboard from '../components/ScoreDashboard';
+import { usePose } from '../engine/usePose';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS + TYPES
 // ─────────────────────────────────────────────────────────────────────────────
-
-const POSE_URL       = 'https://sharana-sabesan09.github.io/sentinel/pose.html';
 const MAX_RECORD_SEC = 60;
 
-/**
- * Navigation type — SessionScreen lives inside the bottom tab navigator
- * which itself lives inside the root stack navigator. The composite type
- * lets us call both tab navigation (switch to Results tab) and stack
- * navigation (replace with Intake for the reset flow).
- */
 type NavProp = CompositeNavigationProp<
   BottomTabNavigationProp<MainTabParamList, 'Live'>,
   NativeStackNavigationProp<RootStackParamList>
@@ -73,21 +66,30 @@ export default function SessionScreen() {
   const [mode,        setMode]        = useState<SessionMode>('standing');
   const [scores,      setScores]      = useState<RiskScores>(DEFAULT_SCORES);
   const [initialized, setInitialized] = useState(false);
-  const [webViewActive, setWebViewActive] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
 
   // ── Recording state ───────────────────────────────────────────────────────
-  // 'idle'      → not recording
-  // 'recording' → capturing frames, countdown running
-  // 'analyzing' → recording stopped, batch analysis in progress
   const [recordState, setRecordState]   = useState<'idle' | 'recording' | 'analyzing'>('idle');
   const [timeLeft,    setTimeLeft]      = useState(MAX_RECORD_SEC);
 
-  // All pose frames captured during the current recording
   const recordingFrames = useRef<RecordedFrame[]>([]);
+  const profileRef      = useRef<UserProfile | null>(null);
+  const detectorsRef    = useRef(new PoseDetectors());
+  const recordStateRef  = useRef(recordState);
 
-  const webViewRef   = useRef<WebView>(null);
-  const profileRef   = useRef<UserProfile | null>(null);
-  const detectorsRef = useRef(new PoseDetectors());
+  // keep ref in sync so the pose effect always sees the latest recordState
+  useEffect(() => { recordStateRef.current = recordState; }, [recordState]);
+
+  // ── VisionCamera setup ────────────────────────────────────────────────────
+  const device = useCameraDevice('back');
+  const { hasPermission, requestPermission } = useCameraPermission();
+
+  useEffect(() => {
+    if (!hasPermission) requestPermission();
+  }, [hasPermission, requestPermission]);
+
+  // ── Pose detection hook ───────────────────────────────────────────────────
+  const { cameraRef, onCameraStarted, pose, status } = usePose();
 
   // ── Load user profile once ────────────────────────────────────────────────
   useEffect(() => {
@@ -99,10 +101,31 @@ export default function SessionScreen() {
   // ── Camera on/off with screen focus ──────────────────────────────────────
   useFocusEffect(
     useCallback(() => {
-      setWebViewActive(true);
-      return () => setWebViewActive(false);
+      setCameraActive(true);
+      return () => setCameraActive(false);
     }, [])
   );
+
+  // ── Process each new pose frame ───────────────────────────────────────────
+  useEffect(() => {
+    if (!pose) return;
+
+    if (recordStateRef.current === 'recording') {
+      recordingFrames.current.push({ t: Date.now(), pose });
+    }
+
+    detectorsRef.current.update(pose, mode);
+    const demographicRisk = profileRef.current?.demographicRiskScore ?? 0;
+    setScores(aggregateScores(detectorsRef.current.measurements, demographicRisk));
+    if (!initialized) setInitialized(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pose]);
+
+  // ── Mode change: reset detector buffers ──────────────────────────────────
+  const handleModeChange = useCallback((newMode: SessionMode) => {
+    detectorsRef.current.reset();
+    setMode(newMode);
+  }, []);
 
   // ── Countdown timer while recording ──────────────────────────────────────
   useEffect(() => {
@@ -113,7 +136,6 @@ export default function SessionScreen() {
     const interval = setInterval(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
-          // Time's up — stop recording and analyze
           clearInterval(interval);
           finishRecording();
           return 0;
@@ -125,34 +147,6 @@ export default function SessionScreen() {
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recordState]);
-
-  // ── Mode change: reset detector buffers ──────────────────────────────────
-  const handleModeChange = useCallback((newMode: SessionMode) => {
-    detectorsRef.current.reset();
-    setMode(newMode);
-  }, []);
-
-  // ── Receive landmarks from MediaPipe WebView ──────────────────────────────
-  const onMessage = useCallback((event: WebViewMessageEvent) => {
-    try {
-      const msg = JSON.parse(event.nativeEvent.data);
-      if (msg.type !== 'pose' || !Array.isArray(msg.landmarks)) return;
-
-      const pose = msg.landmarks as PoseFrame;
-
-      // ── Buffer frame if recording ──────────────────────────────────────
-      if (recordState === 'recording') {
-        recordingFrames.current.push({ t: Date.now(), pose });
-      }
-
-      // ── Live score update ─────────────────────────────────────────────
-      detectorsRef.current.update(pose, mode);
-      const demographicRisk = profileRef.current?.demographicRiskScore ?? 0;
-      setScores(aggregateScores(detectorsRef.current.measurements, demographicRisk));
-      if (!initialized) setInitialized(true);
-
-    } catch { /* ignore malformed messages */ }
-  }, [mode, initialized, recordState]);
 
   // ── Start recording ───────────────────────────────────────────────────────
   const startRecording = useCallback(() => {
@@ -167,14 +161,11 @@ export default function SessionScreen() {
     const frames = recordingFrames.current;
     const demographicRisk = profileRef.current?.demographicRiskScore ?? 0;
 
-    // Run batch analysis on all captured frames
     const result = analyzeRecording(frames, demographicRisk);
     await saveAnalysis(result);
 
     setRecordState('idle');
     recordingFrames.current = [];
-
-    // Switch to the Results tab to show the analysis
     navigation.navigate('Results');
   }, [navigation]);
 
@@ -199,19 +190,15 @@ export default function SessionScreen() {
   return (
     <View style={styles.root}>
 
-      {/* ── FULL-SCREEN WEBVIEW ───────────────────────────────────────── */}
-      {webViewActive && (
-        <WebView
-          ref={webViewRef}
+      {/* ── FULL-SCREEN CAMERA ────────────────────────────────────────── */}
+      {device && hasPermission && cameraActive && (
+        <Camera
+          ref={cameraRef}
           style={StyleSheet.absoluteFill}
-          source={{ uri: POSE_URL }}
-          allowsInlineMediaPlayback
-          mediaPlaybackRequiresUserAction={false}
-          mediaCapturePermissionGrantType="grant"
-          originWhitelist={['*']}
-          mixedContentMode="always"
-          javaScriptEnabled
-          onMessage={onMessage}
+          device={device}
+          isActive={cameraActive}
+          photo={true}
+          onStarted={onCameraStarted}
         />
       )}
 
@@ -221,32 +208,24 @@ export default function SessionScreen() {
         {/* ── TOP BAR ──────────────────────────────────────────────────── */}
         <View style={styles.topBar}>
           <Text style={styles.title}>SENTINEL</Text>
-          <StatusPill ready={initialized} />
+          <StatusPill status={status} ready={initialized} />
           <TouchableOpacity style={styles.resetBtn} onPress={handleReset}>
             <Text style={styles.resetBtnText}>Reset</Text>
           </TouchableOpacity>
         </View>
 
-        {/* ── SPACER ───────────────────────────────────────────────────── */}
         <View style={{ flex: 1 }} pointerEvents="none" />
 
         {/* ── BOTTOM PANEL ─────────────────────────────────────────────── */}
         <View pointerEvents="auto">
-
-          {/* Live scores */}
           <ScoreDashboard scores={scores} mode={mode} initialized={initialized} />
-
-          {/* Record button — sits between scores and mode selector */}
           <RecordButton
             state={recordState}
             timeLeft={timeLeft}
             onStart={startRecording}
             onStop={finishRecording}
           />
-
-          {/* Mode selector */}
           <ModeSelector mode={mode} onChange={handleModeChange} />
-
         </View>
 
       </SafeAreaView>
@@ -258,14 +237,6 @@ export default function SessionScreen() {
 // RECORD BUTTON
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * RecordButton — THE 60-SECOND RECORDING CONTROL
- *
- * Three visual states:
- *   idle       → "● Record 60s" button (dark background, cyan border)
- *   recording  → countdown + "■ Stop" (pulsing red background)
- *   analyzing  → "Analyzing…" spinner text
- */
 function RecordButton({
   state, timeLeft, onStart, onStop,
 }: {
@@ -306,12 +277,12 @@ function RecordButton({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATUS PILL + MODE SELECTOR (same as before)
+// STATUS PILL + MODE SELECTOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-function StatusPill({ ready }: { ready: boolean }) {
-  const color = ready ? '#00c853' : '#f0a500';
-  const label = ready ? 'LIVE' : 'LOADING';
+function StatusPill({ status, ready }: { status: string; ready: boolean }) {
+  const color = ready ? '#00c853' : status === 'error' ? '#f44336' : '#f0a500';
+  const label = ready ? 'LIVE' : status === 'error' ? 'ERROR' : 'LOADING';
   return (
     <View style={[styles.pill, { backgroundColor: color + '33' }]}>
       <View style={[styles.dot, { backgroundColor: color }]} />
@@ -375,7 +346,6 @@ const styles = StyleSheet.create({
   resetBtn:     { paddingHorizontal: 10, paddingVertical: 4 },
   resetBtnText: { fontSize: 12, color: C.muted, fontWeight: '500' },
 
-  // ── Record bar ────────────────────────────────────────────────────────────
   recordBar: {
     backgroundColor: 'rgba(13,27,42,0.92)',
     paddingHorizontal: 12,
@@ -386,7 +356,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: C.border,
   },
-
   recordBtn: {
     flex: 1,
     backgroundColor: 'rgba(0,212,255,0.08)',
@@ -397,7 +366,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   recordBtnText: { color: C.accent, fontSize: 14, fontWeight: '700' },
-
   countdownBadge: {
     backgroundColor: '#f44336',
     borderRadius: 8,
@@ -408,7 +376,6 @@ const styles = StyleSheet.create({
   },
   countdownText:  { color: '#fff', fontSize: 16, fontWeight: '800' },
   recordingLabel: { flex: 1, color: '#f44336', fontSize: 12, fontWeight: '600' },
-
   stopBtn: {
     backgroundColor: 'rgba(244,67,54,0.15)',
     borderWidth: 1,
@@ -417,10 +384,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
-  stopBtnText:    { color: '#f44336', fontSize: 13, fontWeight: '700' },
-  analyzingText:  { flex: 1, color: C.accent, fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  stopBtnText:   { color: '#f44336', fontSize: 13, fontWeight: '700' },
+  analyzingText: { flex: 1, color: C.accent, fontSize: 13, fontWeight: '600', textAlign: 'center' },
 
-  // ── Mode selector ─────────────────────────────────────────────────────────
   modeBar: {
     flexDirection: 'row',
     backgroundColor: 'rgba(13,27,42,0.95)',

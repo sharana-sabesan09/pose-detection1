@@ -58,7 +58,7 @@ export const POSE_HTML = `
     const landmarker = await PoseLandmarker.createFromOptions(vision, {
       baseOptions: {
         modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
-        delegate: 'GPU'
+        delegate: 'CPU'
       },
       runningMode: 'VIDEO',
       numPoses: 1,
@@ -71,10 +71,18 @@ export const POSE_HTML = `
 
     // ── 2. Start the back camera ─────────────────────────────────────────────
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false
-      });
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+      } catch (_) {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+      }
       video.srcObject = stream;
       await new Promise(r => video.addEventListener('loadeddata', r, { once: true }));
       msg.textContent = '';

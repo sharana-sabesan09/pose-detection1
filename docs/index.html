@@ -43,27 +43,33 @@
 
     msg.textContent = 'Starting camera…';
 
-    try {
-      // Try rear camera first, fall back to any camera (simulator has no rear camera)
-      let stream;
+    async function startCamera() {
+      // Small delay — WKWebView needs time to set up its permission delegate
+      // before getUserMedia can be called, otherwise throws "before initialization"
+      await new Promise(r => setTimeout(r, 800));
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false
-        });
-      } catch (_) {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false
-        });
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+            audio: false
+          });
+        } catch (_) {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 } },
+            audio: false
+          });
+        }
+        video.srcObject = stream;
+        await new Promise(r => video.addEventListener('loadeddata', r, { once: true }));
+        msg.textContent = '';
+        loop();
+      } catch (e) {
+        msg.textContent = 'Camera error: ' + e.message;
       }
-      video.srcObject = stream;
-      await new Promise(r => video.addEventListener('loadeddata', r, { once: true }));
-      msg.textContent = '';
-      loop();
-    } catch (e) {
-      msg.textContent = 'Camera error: ' + e.message;
     }
+
+    startCamera();
 
     const draw  = new DrawingUtils(ctx);
     let lastTs  = -1;
