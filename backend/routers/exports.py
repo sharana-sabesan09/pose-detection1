@@ -49,9 +49,7 @@ class SessionExportResponse(BaseModel):
     files: list[str]
 
 
-# Numeric columns from the frame-level debug CSV that go into angles_json.
-# "frame", "timestamp", and "side" are metadata, not angle values.
-_FRAME_NUMERIC_COLS = {
+_ANGLE_COLS = {
     "knee_flex", "fppa", "trunk_lean", "trunk_flex",
     "pelvic_drop", "hip_adduction", "knee_offset",
     "midhip_x", "midhip_y", "velocity",
@@ -59,25 +57,53 @@ _FRAME_NUMERIC_COLS = {
 
 
 def _parse_frames_csv(csv_text: str) -> list[dict]:
-    """Return a list of {timestamp, angles_json} dicts, one per frame row."""
+    """
+    Parse frames.csv into DB-ready dicts.
+
+    Two formats are supported:
+      Landmark CSV  (from buildLandmarkCsv):   t, mode, lm0_x, lm0_y, lm0_z, lm0_v, ...
+      Angle CSV     (from buildFrameDebugCsv): frame, timestamp, knee_flex, fppa, ...
+
+    Both produce {timestamp, angles_json, landmarks_json} dicts.
+    """
     reader = csv.DictReader(io.StringIO(csv_text))
+    fieldnames = set(reader.fieldnames or [])
+    is_landmark_csv = "lm0_x" in fieldnames
+
     rows = []
     for row in reader:
-        ts_raw = row.get("timestamp", "")
-        try:
-            ts = float(ts_raw)
-        except (ValueError, TypeError):
-            continue  # skip malformed rows
-        angles = {}
-        for col in _FRAME_NUMERIC_COLS:
-            raw = row.get(col, "")
-            if raw:
+        if is_landmark_csv:
+            try:
+                ts = float(row.get("t") or 0)
+            except ValueError:
+                continue
+            landmarks = []
+            for i in range(33):
                 try:
-                    angles[col] = float(raw)
+                    landmarks.append({
+                        "x":          float(row.get(f"lm{i}_x") or 0),
+                        "y":          float(row.get(f"lm{i}_y") or 0),
+                        "z":          float(row.get(f"lm{i}_z") or 0),
+                        "visibility": float(row.get(f"lm{i}_v") or 0),
+                    })
                 except ValueError:
-                    pass
-        if angles:
-            rows.append({"timestamp": ts, "angles_json": angles})
+                    landmarks.append({"x": 0, "y": 0, "z": 0, "visibility": 0})
+            rows.append({"timestamp": ts, "angles_json": {}, "landmarks_json": landmarks})
+        else:
+            try:
+                ts = float(row.get("timestamp") or 0)
+            except ValueError:
+                continue
+            angles = {}
+            for col in _ANGLE_COLS:
+                raw = row.get(col, "")
+                if raw:
+                    try:
+                        angles[col] = float(raw)
+                    except ValueError:
+                        pass
+            if angles:
+                rows.append({"timestamp": ts, "angles_json": angles, "landmarks_json": None})
     return rows
 
 
@@ -138,6 +164,7 @@ async def export_session(
                     session_id=ex.linked_session_id,
                     timestamp=fr["timestamp"],
                     angles_json=fr["angles_json"],
+                    landmarks_json=fr.get("landmarks_json"),
                 ))
             await db.commit()
 
@@ -146,3 +173,36 @@ async def export_session(
         written_to=str(out_dir),
         files=written,
     )
+
+
+@router.get("/sessions/{mobile_session_id}/landmarks")
+async def get_session_landmarks(
+    mobile_session_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return the raw 33-landmark frames stored for a session.
+    mobile_session_id is the ISO timestamp string the phone used (e.g. '2026-04-25T10:57:06.124Z').
+    """
+    result = await db.execute(
+        select(ExerciseSession).where(
+            ExerciseSession.mobile_session_id == mobile_session_id
+        )
+    )
+    ex = result.scalars().first()
+    if not ex or not ex.linked_session_id:
+        raise HTTPException(status_code=404, detail="session not found or has no linked frames")
+
+    frames_result = await db.execute(
+        select(PoseFrame)
+        .where(PoseFrame.session_id == ex.linked_session_id)
+        .where(PoseFrame.landmarks_json.isnot(None))
+        .order_by(PoseFrame.timestamp)
+    )
+    frames = frames_result.scalars().all()
+
+    return {
+        "session_id": mobile_session_id,
+        "frame_count": len(frames),
+        "frames": [{"t": f.timestamp, "landmarks": f.landmarks_json} for f in frames],
+    }

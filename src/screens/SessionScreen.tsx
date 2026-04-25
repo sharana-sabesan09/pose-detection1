@@ -17,7 +17,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, Platform, Alert,
+  SafeAreaView, Platform, Alert, useWindowDimensions,
 } from 'react-native';
 import WebView, { WebViewMessageEvent } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -45,6 +45,8 @@ import {
 import { RepFeatures } from '../engine/exercise/types';
 import { BACKEND_URL } from '../constants';
 import ScoreDashboard from '../components/ScoreDashboard';
+import GhostSkeletonOverlay from '../components/GhostSkeletonOverlay';
+import { SQUAT_REFERENCE } from '../engine/exercise/references/squat';
 import { POSE_HTML } from '../engine/poseHtml';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,11 +73,14 @@ const DEFAULT_SCORES: RiskScores = {
 
 export default function SessionScreen() {
   const navigation = useNavigation<NavProp>();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
-  const [mode,        setMode]        = useState<SessionMode>('standing');
-  const [scores,      setScores]      = useState<RiskScores>(DEFAULT_SCORES);
-  const [initialized, setInitialized] = useState(false);
+  const [mode,         setMode]        = useState<SessionMode>('standing');
+  const [scores,       setScores]      = useState<RiskScores>(DEFAULT_SCORES);
+  const [initialized,  setInitialized] = useState(false);
   const [webViewActive, setWebViewActive] = useState(false);
+  const [currentPose,  setCurrentPose]  = useState<PoseFrame | null>(null);
+  const refFrameIdxRef = useRef(0);
 
   // ── Recording state ───────────────────────────────────────────────────────
   const [recordState, setRecordState]   = useState<'idle' | 'recording' | 'analyzing'>('idle');
@@ -165,6 +170,9 @@ export default function SessionScreen() {
           console.log('[SessionScreen] rep schema:', JSON.stringify(finishedRep));
         }
       }
+
+      setCurrentPose(pose);
+      refFrameIdxRef.current = (refFrameIdxRef.current + 1) % SQUAT_REFERENCE.length;
 
       detectorsRef.current.update(pose, mode);
       const demographicRisk = profileRef.current?.demographicRiskScore ?? 0;
@@ -285,6 +293,14 @@ export default function SessionScreen() {
           onMessage={onMessage}
         />
       )}
+
+      {/* ── POSE OVERLAY: reference ghost + live user skeleton ───────── */}
+      <GhostSkeletonOverlay
+        refFrame={SQUAT_REFERENCE[refFrameIdxRef.current]}
+        liveFrame={currentPose}
+        width={screenWidth}
+        height={screenHeight}
+      />
 
       {/* ── RN OVERLAY ────────────────────────────────────────────────── */}
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">

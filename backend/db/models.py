@@ -74,6 +74,8 @@ class PoseFrame(Base):
     session_id = Column(String(36), ForeignKey("sessions.id"), nullable=False)
     timestamp = Column(Float, nullable=False)
     angles_json = Column(JSON, nullable=False)
+    # Raw 33-landmark array from MediaPipe: [{x,y,z,visibility}, ...] × 33
+    landmarks_json = Column(JSON, nullable=True)
 
     session = relationship("Session", back_populates="frames")
 
