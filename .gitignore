@@ -2,6 +2,7 @@ node_modules/
 .vscode/
 .DS_Store
 .idea/
+.claude
 
 # iOS generated
 ios/Pods/
