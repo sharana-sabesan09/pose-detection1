@@ -45,3 +45,14 @@ class ProgressOutput(BaseModel):
     overall_trend: str
     milestones_reached: list[str]
     next_goals: list[str]
+
+
+class ExerciseReporterOutput(BaseModel):
+    summary: str
+    session_highlights: list[str]
+    recommendations: list[str]
+    fall_risk_score: float
+    reinjury_risk_score: float
+    rom_score: float
+    good_reps: int
+    filtered_reps: int
