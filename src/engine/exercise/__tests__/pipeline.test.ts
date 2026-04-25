@@ -2,8 +2,8 @@
  * src/engine/exercise/__tests__/pipeline.test.ts
  *
  * Synthetic squat data drives the full post-hoc pipeline.
- * makeFrame() moves hips downward proportionally to knee flexion so the
- * hip-Y detector has a real signal to work with.
+ * makeFrame() produces real kneeFlexion values for a given bend angle,
+ * which is the signal detectRepRanges now uses.
  */
 
 import { LM }                         from '../../landmarks';
