@@ -1,25 +1,16 @@
 /**
  * src/engine/poseHtml.ts — MEDIAPIPE POSE HTML FOR WEBVIEW
  *
- * This string is loaded into a React Native WebView. Inside that WebView the
- * browser engine runs — which means WebAssembly, WebGL GPU acceleration, and
- * the full MediaPipe Tasks Vision JavaScript SDK all work exactly like they do
- * in Chrome or Safari.
+ * Landmark coordinates from MediaPipe are in raw video space [0,1].
+ * The video element uses object-fit:cover, so it is zoomed and cropped
+ * to fill the screen. Without correction, landmarks appear shifted —
+ * the head sits at the neck and feet sit at the ankles.
  *
- * WHAT HAPPENS INSIDE THE WEBVIEW:
- *   1. MediaPipe Tasks Vision SDK loads from the jsDelivr CDN (~1MB WASM)
- *   2. PoseLandmarker model downloads from Google Storage (~3MB, first run only)
- *   3. getUserMedia() starts the back camera
- *   4. Every animation frame (~30fps), detectForVideo() runs on the live video
- *   5. DrawingUtils draws the cyan skeleton directly onto a canvas
- *   6. window.ReactNativeWebView.postMessage() sends 33 landmark objects to RN
- *      so the score detectors (Steps 4-7) can do their work natively
- *
- * WHY THIS IS FASTER THAN TF.JS ON THE JS THREAD:
- *   TF.js with the CPU backend runs inference in Hermes JS — single-threaded,
- *   no SIMD, no GPU. MoveNet Lightning took ~10 seconds per frame.
- *   MediaPipe WASM runs on a dedicated thread with SIMD and WebGL GPU shaders.
- *   MediaPipe Pose Lite gives ~30fps on any modern iPhone.
+ * Fix: compute the object-fit:cover scale + offset and re-normalise each
+ * landmark into screen [0,1] space before drawing or posting to RN.
+ * DrawingUtils multiplies x by canvas.width and y by canvas.height, so
+ * keeping canvas in screen pixels and passing screen-normalised landmarks
+ * places every joint exactly where the video pixel appears on screen.
  */
 
 export const POSE_HTML = `
@@ -33,7 +24,7 @@ export const POSE_HTML = `
     video  { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
     canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
     #msg   { position: absolute; top: 12px; left: 12px; color: #fff; font: 12px monospace;
-             background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px; }
+             background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -45,12 +36,11 @@ export const POSE_HTML = `
     import { PoseLandmarker, FilesetResolver, DrawingUtils }
       from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm';
 
-    const video  = document.getElementById('v');
+    const video = document.getElementById('v');
     const canvas = document.getElementById('c');
     const msg    = document.getElementById('msg');
     const ctx    = canvas.getContext('2d');
 
-    // ── 1. Load MediaPipe WASM + model ──────────────────────────────────────
     const vision = await FilesetResolver.forVisionTasks(
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
     );
@@ -58,7 +48,7 @@ export const POSE_HTML = `
     const landmarker = await PoseLandmarker.createFromOptions(vision, {
       baseOptions: {
         modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
-        delegate: 'CPU'
+        delegate: 'GPU'
       },
       runningMode: 'VIDEO',
       numPoses: 1,
@@ -69,20 +59,11 @@ export const POSE_HTML = `
 
     msg.textContent = 'Starting camera…';
 
-    // ── 2. Start the back camera ─────────────────────────────────────────────
     try {
-      let stream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false
-        });
-      } catch (_) {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false
-        });
-      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false
+      });
       video.srcObject = stream;
       await new Promise(r => video.addEventListener('loadeddata', r, { once: true }));
       msg.textContent = '';
@@ -91,40 +72,52 @@ export const POSE_HTML = `
       msg.textContent = 'Camera error: ' + e.message;
     }
 
-    // ── 3. Detection + draw loop ─────────────────────────────────────────────
-    const draw  = new DrawingUtils(ctx);
-    let lastTs  = -1;
+    const draw = new DrawingUtils(ctx);
+    let lastTs = -1;
 
     function loop() {
       requestAnimationFrame(loop);
-
       if (video.readyState < 2) return;
 
-      // Sync canvas size to video dimensions every frame (handles rotation changes)
-      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width  = video.videoWidth;
-        canvas.height = video.videoHeight;
-      }
+      // Canvas tracks screen size, not raw video size.
+      // DrawingUtils multiplies landmark.x by canvas.width, so keeping
+      // canvas in screen pixels and passing screen-normalised landmarks
+      // places joints exactly where the video pixels appear on screen.
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      if (canvas.width  !== W) canvas.width  = W;
+      if (canvas.height !== H) canvas.height = H;
 
       if (video.currentTime === lastTs) return;
       lastTs = video.currentTime;
 
       const result = landmarker.detectForVideo(video, performance.now());
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, W, H);
 
       if (result.landmarks && result.landmarks.length > 0) {
         const lms = result.landmarks[0];
 
-        // Draw cyan skeleton using MediaPipe's built-in DrawingUtils
-        draw.drawConnectors(lms, PoseLandmarker.POSE_CONNECTIONS,
+        // object-fit:cover scale: how much the video is zoomed to fill the screen
+        const vw = video.videoWidth, vh = video.videoHeight;
+        const scale   = Math.max(W / vw, H / vh);
+        const offsetX = (W - vw * scale) / 2;
+        const offsetY = (H - vh * scale) / 2;
+
+        // Re-normalise from raw video [0,1] → screen [0,1]
+        const aligned = lms.map(lm => ({
+          ...lm,
+          x: (lm.x * vw * scale + offsetX) / W,
+          y: (lm.y * vh * scale + offsetY) / H,
+        }));
+
+        draw.drawConnectors(aligned, PoseLandmarker.POSE_CONNECTIONS,
           { color: '#00d4ff', lineWidth: 2.5 });
-        draw.drawLandmarks(lms,
+        draw.drawLandmarks(aligned,
           { color: '#00d4ff', fillColor: '#00d4ff', lineWidth: 1, radius: 4 });
 
-        // Send landmarks to React Native for score computation
         window.ReactNativeWebView?.postMessage(JSON.stringify({
           type: 'pose',
-          landmarks: lms   // 33 objects: { x, y, z, visibility }
+          landmarks: aligned
         }));
       }
     }
