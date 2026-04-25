@@ -19,3 +19,15 @@ export const MODEL_KEY = 'a2ee025f302841a2b178883c361b4285';
 // Get it from: zetic.ai → Model Hub → MediaPipe Pose → copy the model key.
 // Until this is set, the app runs in simulation mode (fake landmarks, real UI).
 export const POSE_MODEL_KEY = 'a2ee025f302841a2b178883c361b4285';
+
+// Where the phone POSTs session artifacts at end-of-recording so they land
+// on the laptop. Default points at Metro's dev server (port 8081), which is
+// already running while you're developing — see metro.config.js for the
+// /exports/session middleware that receives the POST and writes the files
+// into <repo>/exports/<stamp>_<session_id>/.
+//
+//   • Find your laptop's LAN IP: `ipconfig getifaddr en0` (Wi-Fi)
+//   • If you switch to FastAPI later (backend/run_agent.py), change the
+//     port to 8000.
+//   • Set to '' to disable backend POST and use only the iOS share sheet.
+export const BACKEND_URL = 'http://192.168.1.100:8081';

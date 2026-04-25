@@ -4,6 +4,7 @@ from rag.loader import load_clinical_guidelines
 import routers.auth as auth
 import routers.sessions as sessions
 import routers.reports as reports
+import routers.exports as exports
 
 
 @asynccontextmanager
@@ -17,6 +18,7 @@ app = FastAPI(title="Sentinel Backend", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(sessions.router)
 app.include_router(reports.router)
+app.include_router(exports.router)
 
 
 @app.get("/health")
