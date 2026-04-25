@@ -11,8 +11,10 @@ from utils.audit import write_audit
 
 logger = logging.getLogger(__name__)
 
-# Expected ROM ranges per joint (degrees)
+# Expected ROM ranges per joint (degrees).
+# Features flagged when their range-of-motion is < 40 % of this value.
 _EXPECTED_ROM = {
+    # Standard PT joint ROM
     "hip_flexion": 120,
     "hip_extension": 30,
     "hip_abduction": 45,
@@ -22,6 +24,20 @@ _EXPECTED_ROM = {
     "shoulder_flexion": 180,
     "shoulder_abduction": 180,
     "lumbar_flexion": 60,
+    # Exercise pipeline frame CSV names
+    "knee_flex": 135,     # alias for knee_flexion
+    "trunk_flex": 60,     # forward trunk lean ≈ lumbar_flexion
+}
+
+# Frame CSV features where a HIGH peak value signals a movement error.
+# Flagged when max across all frames exceeds the threshold.
+# Values match ERROR_THRESHOLDS in src/engine/exercise/types.ts.
+_ERROR_THRESHOLDS: dict[str, float] = {
+    "fppa":          8.0,   # degrees — knee valgus via FPPA
+    "trunk_lean":   10.0,   # degrees — lateral trunk lean
+    "pelvic_drop":   5.0,   # degrees — Trendelenburg
+    "hip_adduction": 10.0,  # degrees — thigh toward midline
+    "knee_offset":   0.20,  # pelvis-widths — knee over foot
 }
 
 
@@ -57,8 +73,14 @@ async def run_pose_analysis(session_id: str, db: AsyncSession) -> PoseAnalysisOu
         joint_stats[joint] = {"mean": mean, "min": mn, "max": mx, "std": std, "rom": rom}
         rom_contributions.append(rom)
 
+        # ROM-deficiency flag: range is too small relative to expected
         expected = _EXPECTED_ROM.get(joint)
         if expected and (rom / expected) < 0.40:
+            flagged_joints.append(joint)
+
+        # Error-excess flag: peak value exceeds a movement-quality threshold
+        error_thresh = _ERROR_THRESHOLDS.get(joint)
+        if error_thresh and mx > error_thresh and joint not in flagged_joints:
             flagged_joints.append(joint)
 
     raw_rom = statistics.mean(rom_contributions) if rom_contributions else 0.0

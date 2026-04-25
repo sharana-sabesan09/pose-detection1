@@ -84,3 +84,6 @@ class ExerciseSessionResponse(BaseModel):
     exercise: str
     numReps: int
     overallRating: str
+    # UUID of the companion Session row — pass to POST /sessions/{id}/frame
+    # and POST /exports/session so raw frames land in the DB for the agents.
+    linkedSessionId: str

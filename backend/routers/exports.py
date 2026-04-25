@@ -10,14 +10,21 @@ plugging into Xcode.
 Auth: skipped while DEV_MODE is on (matches the rest of the dev flow).
 """
 
+import csv
+import io
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from config import settings
+from db.session import get_db
+from db.models import ExerciseSession, PoseFrame
 
 
 # Resolve <repo>/exports relative to this file. backend/routers/exports.py
@@ -42,8 +49,43 @@ class SessionExportResponse(BaseModel):
     files: list[str]
 
 
+# Numeric columns from the frame-level debug CSV that go into angles_json.
+# "frame", "timestamp", and "side" are metadata, not angle values.
+_FRAME_NUMERIC_COLS = {
+    "knee_flex", "fppa", "trunk_lean", "trunk_flex",
+    "pelvic_drop", "hip_adduction", "knee_offset",
+    "midhip_x", "midhip_y", "velocity",
+}
+
+
+def _parse_frames_csv(csv_text: str) -> list[dict]:
+    """Return a list of {timestamp, angles_json} dicts, one per frame row."""
+    reader = csv.DictReader(io.StringIO(csv_text))
+    rows = []
+    for row in reader:
+        ts_raw = row.get("timestamp", "")
+        try:
+            ts = float(ts_raw)
+        except (ValueError, TypeError):
+            continue  # skip malformed rows
+        angles = {}
+        for col in _FRAME_NUMERIC_COLS:
+            raw = row.get(col, "")
+            if raw:
+                try:
+                    angles[col] = float(raw)
+                except ValueError:
+                    pass
+        if angles:
+            rows.append({"timestamp": ts, "angles_json": angles})
+    return rows
+
+
 @router.post("/session", response_model=SessionExportResponse)
-async def export_session(body: SessionExportRequest) -> SessionExportResponse:
+async def export_session(
+    body: SessionExportRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SessionExportResponse:
     if not settings.DEV_MODE:
         raise HTTPException(status_code=403, detail="exports endpoint is dev-only")
 
@@ -78,6 +120,26 @@ async def export_session(body: SessionExportRequest) -> SessionExportResponse:
         p = out_dir / "frames.csv"
         p.write_text(body.frames_csv, encoding="utf-8")
         written.append(str(p))
+
+        # Also ingest frames into the DB so pose_analysis_agent can read them.
+        # Look up the ExerciseSession by mobile_session_id to find the linked
+        # Session UUID that PoseFrame rows must reference.
+        result = await db.execute(
+            select(ExerciseSession).where(
+                ExerciseSession.mobile_session_id == body.session_id
+            )
+        )
+        ex = result.scalars().first()
+        if ex and ex.linked_session_id:
+            frame_rows = _parse_frames_csv(body.frames_csv)
+            for fr in frame_rows:
+                db.add(PoseFrame(
+                    id=str(uuid.uuid4()),
+                    session_id=ex.linked_session_id,
+                    timestamp=fr["timestamp"],
+                    angles_json=fr["angles_json"],
+                ))
+            await db.commit()
 
     return SessionExportResponse(
         session_id=safe_id,

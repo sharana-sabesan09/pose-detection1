@@ -90,6 +90,18 @@ async def store_exercise_result(
     if existing.scalars().first():
         raise HTTPException(status_code=409, detail="Session already stored")
 
+    # Companion Session row so PoseFrame records (raw frames) have somewhere
+    # to live and pose_analysis_agent can read them through the normal path.
+    # patient_id may be None for anonymous exercise sessions.
+    linked_session = Session(
+        id=str(uuid.uuid4()),
+        patient_id=body.patientId,
+        started_at=datetime.utcfromtimestamp(body.startedAtMs / 1000),
+        ended_at=datetime.utcfromtimestamp(body.endedAtMs / 1000),
+    )
+    db.add(linked_session)
+    await db.flush()
+
     exercise_session = ExerciseSession(
         id=str(uuid.uuid4()),
         patient_id=body.patientId,
@@ -100,9 +112,10 @@ async def store_exercise_result(
         ended_at_ms=body.endedAtMs,
         duration_ms=body.durationMs,
         summary_json=body.summary.summary.model_dump(),
+        linked_session_id=linked_session.id,
     )
     db.add(exercise_session)
-    await db.flush()  # get exercise_session.id before inserting reps
+    await db.flush()
 
     for rep in body.summary.reps:
         db.add(RepAnalysis(
@@ -146,4 +159,5 @@ async def store_exercise_result(
         exercise=exercise_session.exercise,
         numReps=exercise_session.num_reps,
         overallRating=body.summary.summary.overallRating,
+        linkedSessionId=linked_session.id,
     )

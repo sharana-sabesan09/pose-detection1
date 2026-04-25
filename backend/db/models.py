@@ -106,7 +106,12 @@ class ExerciseSession(Base):
     summary_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    # When set, raw PoseFrame rows are stored against this Session so the
+    # pose_analysis_agent can read them through the existing frames pipeline.
+    linked_session_id = Column(String(36), ForeignKey("sessions.id"), nullable=True)
+
     patient = relationship("Patient", foreign_keys=[patient_id])
+    linked_session = relationship("Session", foreign_keys=[linked_session_id])
     reps = relationship("RepAnalysis", back_populates="exercise_session", cascade="all, delete-orphan")
 
 
