@@ -39,8 +39,10 @@ A React Native mobile app + Python FastAPI backend for real-time pose detection,
 | **Fetch.ai** | `agentverse_agent.py` (orchestrator uAgent), `bureau.py` (runs all agents), `messages.py` (typed message models) |
 | **RAG** | `rag/loader.py` (ChromaDB ingest), `rag/retriever.py` (query) |
 | **DB** | SQLAlchemy async models, Alembic migrations, PostgreSQL |
-| **API** | `routers/sessions.py`, `routers/reports.py`, JWT auth |
+| **API** | `routers/sessions.py`, `routers/reports.py`, `routers/exports.py`, JWT auth |
 | **HIPAA** | Presidio PHI scanner + audit log on every agent write |
+
+See [`backend/BACKEND.md`](backend/BACKEND.md) for the full technical reference — data models, all API endpoints, agent pipeline internals, RAG setup, and Railway deployment detail.
 
 ---
 
@@ -57,17 +59,14 @@ npx react-native run-ios   # or run-android
 
 ```bash
 cd backend
-cp .env.example .env       # fill in DATABASE_URL, OPENAI_API_KEY, AGENTVERSE_MAILBOX_KEY, etc.
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-alembic upgrade head
-python run_agent.py
+cp .env.example .env       # fill in OPENAI_API_KEY at minimum
+uv sync                    # install dependencies (uses uv lockfile)
+python run_agent.py        # starts FastAPI (port 8000) + Fetch.ai Bureau
 ```
 
-API available at `http://localhost:8000`. Docs at `/docs`.
+API available at `http://localhost:8000`. Swagger UI at `/docs`.
 
-`python run_agent.py` starts both the FastAPI server (port 8000) and the Fetch.ai Bureau (all 7 uAgents) in one process.
+`run_agent.py` starts the FastAPI server (port 8000) as a daemon thread and the Fetch.ai Bureau (all 7 uAgents) in the main thread. SQLite is used locally by default — no database setup required.
 
 ---
 
@@ -151,7 +150,20 @@ See `backend/.env.example` for all required variables:
 railway up
 ```
 
-The `backend/Dockerfile` and `backend/railway.toml` handle everything. Health check at `GET /health`.
+The `backend/Dockerfile` and `backend/railway.toml` handle the build. Before deploying, set the following Railway environment variables:
+
+| Variable | Notes |
+|----------|-------|
+| `DATABASE_URL` | `postgresql+asyncpg://...` — use Railway's PostgreSQL plugin URL, rewritten to the asyncpg scheme |
+| `OPENAI_API_KEY` | Required by all agents |
+| `JWT_SECRET` | Random 64-char string |
+| `CHROMA_PERSIST_DIR` | `/app/chroma_db` — mount a Railway volume here for persistence across deploys |
+| `AGENTVERSE_MAILBOX_KEY` | Optional — enables the Fetch.ai Agentverse path |
+| `DEV_MODE` | `False` — enforces JWT auth and disables the dev-only exports endpoint |
+
+Railway runs `alembic upgrade head` as a release command before cutting over traffic, so migrations are applied automatically on each deploy. Health check at `GET /health`.
+
+For more detail see [`backend/BACKEND.md`](backend/BACKEND.md).
 
 ---
 

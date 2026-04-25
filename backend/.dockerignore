@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+chroma_db
+sentinel_dev.db
+exports

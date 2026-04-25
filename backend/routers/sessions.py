@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from db.session import get_db
-from db.models import Session, PoseFrame
+from db.models import Session, PoseFrame, ExerciseSession, RepAnalysis
 from schemas.session import IntakeInput, ReporterOutput
 from schemas.report import SessionStartRequest, SessionStartResponse, FrameRequest
+from schemas.exercise import ExerciseSessionResult, ExerciseSessionResponse
 from agents.orchestrator import run_session_pipeline
 from routers.auth import require_jwt
 
@@ -75,3 +76,74 @@ async def end_session(
         raise HTTPException(status_code=500, detail="Pipeline failed")
 
     return ReporterOutput(**reporter)
+
+
+@router.post("/exercise-result", response_model=ExerciseSessionResponse, status_code=201)
+async def store_exercise_result(
+    body: ExerciseSessionResult,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_jwt),
+):
+    existing = await db.execute(
+        select(ExerciseSession).where(ExerciseSession.mobile_session_id == body.sessionId)
+    )
+    if existing.scalars().first():
+        raise HTTPException(status_code=409, detail="Session already stored")
+
+    exercise_session = ExerciseSession(
+        id=str(uuid.uuid4()),
+        patient_id=body.patientId,
+        mobile_session_id=body.sessionId,
+        exercise=body.exercise,
+        num_reps=body.numReps,
+        started_at_ms=body.startedAtMs,
+        ended_at_ms=body.endedAtMs,
+        duration_ms=body.durationMs,
+        summary_json=body.summary.summary.model_dump(),
+    )
+    db.add(exercise_session)
+    await db.flush()  # get exercise_session.id before inserting reps
+
+    for rep in body.summary.reps:
+        db.add(RepAnalysis(
+            id=str(uuid.uuid4()),
+            exercise_session_id=exercise_session.id,
+            rep_id=rep.repId,
+            side=rep.side,
+            start_frame=rep.timing.startFrame,
+            bottom_frame=rep.timing.bottomFrame,
+            end_frame=rep.timing.endFrame,
+            rep_duration_ms=rep.timing.durationMs,
+            knee_flexion_deg=rep.features.kneeFlexionDeg,
+            rom_ratio=rep.features.romRatio,
+            fppa_peak=rep.features.fppaPeak,
+            fppa_at_depth=rep.features.fppaAtDepth,
+            trunk_lean_peak=rep.features.trunkLeanPeak,
+            trunk_flex_peak=rep.features.trunkFlexPeak,
+            pelvic_drop_peak=rep.features.pelvicDropPeak,
+            pelvic_shift_peak=rep.features.pelvicShiftPeak,
+            hip_adduction_peak=rep.features.hipAdductionPeak,
+            knee_offset_peak=rep.features.kneeOffsetPeak,
+            sway_norm=rep.features.swayNorm,
+            smoothness=rep.features.smoothness,
+            knee_valgus=rep.errors.kneeValgus,
+            trunk_lean=rep.errors.trunkLean,
+            trunk_flex=rep.errors.trunkFlex,
+            pelvic_drop=rep.errors.pelvicDrop,
+            pelvic_shift=rep.errors.pelvicShift,
+            hip_adduction=rep.errors.hipAdduction,
+            knee_over_foot=rep.errors.kneeOverFoot,
+            balance=rep.errors.balance,
+            total_errors=rep.score.totalErrors,
+            classification=rep.score.classification,
+            confidence=rep.confidence,
+        ))
+
+    await db.commit()
+    return ExerciseSessionResponse(
+        id=exercise_session.id,
+        sessionId=exercise_session.mobile_session_id,
+        exercise=exercise_session.exercise,
+        numReps=exercise_session.num_reps,
+        overallRating=body.summary.summary.overallRating,
+    )

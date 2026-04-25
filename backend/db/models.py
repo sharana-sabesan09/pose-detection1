@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Float, ForeignKey, Text, DateTime, JSON
+from sqlalchemy import Column, String, Float, Integer, ForeignKey, Text, DateTime, JSON, Boolean
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 # Use plain String(36) for UUIDs — works on both SQLite and PostgreSQL.
@@ -88,6 +88,72 @@ class Summary(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     session = relationship("Session", back_populates="summaries")
+
+
+class ExerciseSession(Base):
+    __tablename__ = "exercise_sessions"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    patient_id = Column(String(36), ForeignKey("patients.id"), nullable=True)
+    # ISO timestamp string sent from the mobile app ("2026-04-25T10:57:06.124Z")
+    mobile_session_id = Column(String(64), nullable=False, unique=True)
+    exercise = Column(String(64), nullable=False)
+    num_reps = Column(Integer, nullable=False)
+    started_at_ms = Column(Float, nullable=False)
+    ended_at_ms = Column(Float, nullable=False)
+    duration_ms = Column(Float, nullable=False)
+    # Aggregate summary stats (avgDepth, consistency, overallRating, etc.)
+    summary_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    patient = relationship("Patient", foreign_keys=[patient_id])
+    reps = relationship("RepAnalysis", back_populates="exercise_session", cascade="all, delete-orphan")
+
+
+class RepAnalysis(Base):
+    __tablename__ = "rep_analyses"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    exercise_session_id = Column(String(36), ForeignKey("exercise_sessions.id"), nullable=False)
+    rep_id = Column(Integer, nullable=False)
+    side = Column(String(10), nullable=False)  # "left" | "right"
+
+    # Timing
+    start_frame = Column(Integer, nullable=True)
+    bottom_frame = Column(Integer, nullable=True)
+    end_frame = Column(Integer, nullable=True)
+    rep_duration_ms = Column(Float, nullable=True)
+
+    # Biomechanical features
+    knee_flexion_deg = Column(Float, nullable=True)
+    rom_ratio = Column(Float, nullable=True)
+    fppa_peak = Column(Float, nullable=True)
+    fppa_at_depth = Column(Float, nullable=True)
+    trunk_lean_peak = Column(Float, nullable=True)
+    trunk_flex_peak = Column(Float, nullable=True)
+    pelvic_drop_peak = Column(Float, nullable=True)
+    pelvic_shift_peak = Column(Float, nullable=True)
+    hip_adduction_peak = Column(Float, nullable=True)
+    knee_offset_peak = Column(Float, nullable=True)
+    sway_norm = Column(Float, nullable=True)
+    smoothness = Column(Float, nullable=True)
+
+    # Error flags
+    knee_valgus = Column(Boolean, nullable=True)
+    trunk_lean = Column(Boolean, nullable=True)
+    trunk_flex = Column(Boolean, nullable=True)
+    pelvic_drop = Column(Boolean, nullable=True)
+    pelvic_shift = Column(Boolean, nullable=True)
+    hip_adduction = Column(Boolean, nullable=True)
+    knee_over_foot = Column(Boolean, nullable=True)
+    balance = Column(Boolean, nullable=True)
+
+    # Score
+    total_errors = Column(Integer, nullable=True)
+    classification = Column(String(32), nullable=True)
+    confidence = Column(Float, nullable=True)
+
+    exercise_session = relationship("ExerciseSession", back_populates="reps")
 
 
 class AuditLog(Base):
