@@ -1,68 +1,132 @@
-# This template is deprecated
+# Sentinel — AI-Powered Physical Therapy Assistant
 
-React Native added [first-class support for Typescript in version 0.71](https://reactnative.dev/blog/2023/01/03/typescript-first), with the base template now utilizing it. Additionally, the types have been integrated into the React Native repository. Although this template can still be used to generate projects with older versions of React Native, we will no longer update it. We would like to express our gratitude to all contributors for their efforts in enhancing this template over the years.
+A React Native mobile app + Python FastAPI backend for real-time pose detection, fall risk assessment, and longitudinal PT progress tracking.
 
-## :space_invader: React Native Template TypeScript
+---
 
-<p>
-  <a href="https://github.com/react-native-community/react-native-template-typescript/actions/workflows/npm-publish.yml">
-    <img alt="Build Status" src="https://github.com/react-native-community/react-native-template-typescript/actions/workflows/npm-publish.yml/badge.svg" />
-  </a>
-  <a href="https://github.com/react-native-community/react-native-template-typescript#readme">
-    <img alt="Documentation" src="https://img.shields.io/badge/documentation-yes-brightgreen.svg" />
-  </a>
-  <a href="https://github.com/react-native-community/react-native-template-typescript/graphs/commit-activity">
-    <img alt="Maintenance" src="https://img.shields.io/badge/Maintained%3F-yes-green.svg" />
-  </a>
-  <a href="https://github.com/react-native-community/react-native-template-typescript/blob/master/LICENSE">
-    <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" />
-  </a>
-</p>
+## Architecture
 
-> Clean and minimalist React Native template for a quick start with TypeScript.
-
-## :star: Features
-
-- Elegant usage directly within the [React Native CLI](https://github.com/react-native-community/cli)
-- Consistent with the default React Native template
-- Minimal additional dependencies
-
-## :arrow_forward: Usage
-
-```sh
-npx react-native init MyApp --template react-native-template-typescript@6.12.10
+```
+┌─────────────────────────────┐       ┌──────────────────────────────────────┐
+│  React Native App (mobile)  │──────▶│  FastAPI Backend  (Python 3.11+)     │
+│                             │  JWT  │                                      │
+│  • Live camera pose capture │◀──────│  • Multi-agent clinical pipeline     │
+│  • Real-time risk scores    │       │  • HIPAA-compliant PHI redaction      │
+│  • Session recording        │       │  • RAG over clinical guidelines       │
+│  • Progress dashboard       │       │  • PostgreSQL + ChromaDB              │
+└─────────────────────────────┘       └──────────────────────────────────────┘
 ```
 
-See the below table to find out which version of the template to use.
+### Mobile (React Native + TypeScript)
 
-#### React Native <=> Template Version
+| File | Purpose |
+|------|---------|
+| `App.tsx` | Root navigator — Intake once, then Main tabs |
+| `src/screens/SessionScreen.tsx` | Live camera, skeleton overlay, score dashboard, recording |
+| `src/screens/DashboardScreen.tsx` | Analysis history |
+| `src/screens/IntakeScreen.tsx` | One-time patient profile collection |
+| `src/engine/detectors.ts` | Pose detectors: balance, transition, gait, lateral sway |
+| `src/engine/scoreAggregator.ts` | Weighted risk score aggregation |
+| `src/engine/analyzeRecording.ts` | Post-session analysis pipeline |
+| `src/components/ScoreDashboard.tsx` | Live score display component |
+| `src/components/SkeletonOverlay.tsx` | 33-point MediaPipe skeleton renderer |
 
-| React Native | Template |
-| ------------ | -------- |
-| 0.70         | 6.12.\*  |
-| 0.69         | 6.11.\*  |
-| 0.68         | 6.10.\*  |
-| 0.67         | 6.9.\*   |
-| 0.66         | 6.8.\*   |
-| 0.65         | 6.7.\*   |
-| 0.64         | 6.6.\*   |
-| 0.63         | 6.5.\*   |
-| 0.62         | 6.4.\*   |
-| 0.61         | 6.3.\*   |
-| 0.60         | 6.2.\*   |
+### Backend (`backend/` — FastAPI + uAgents)
 
-## :warning: React Native CLI
+| Layer | Modules |
+|-------|---------|
+| **Agents** | `orchestrator`, `intake`, `pose_analysis`, `fall_risk`, `reinjury_risk`, `reporter`, `progress`, `hipaa` |
+| **RAG** | `rag/loader.py` (ChromaDB ingest), `rag/retriever.py` (query) |
+| **DB** | SQLAlchemy async models, Alembic migrations, PostgreSQL |
+| **API** | `routers/sessions.py`, `routers/reports.py`, JWT auth |
+| **HIPAA** | Presidio PHI scanner + audit log on every agent write |
 
-This template only works with the new CLI. Make sure you have uninstalled the legacy `react-native-cli` first (`npm uninstall -g react-native-cli`) for the below command to work. If you wish to not use `npx`, you can also install the new CLI globally (`npm i -g @react-native-community/cli` or `yarn global add @react-native-community/cli`).
+---
 
-If you tried the above and still get the react-native-template-react- native-template-typescript: Not found error, please try adding the `--ignore-existing` flag to [force npx to ignore](https://github.com/npm/npx#description) any locally installed versions of the CLI and use the latest.
+## Quick Start
 
-Further information can be found here: https://github.com/react-native-community/cli#about
+### Mobile
 
-## :computer: Contributing
+```bash
+npm install
+npx react-native run-ios   # or run-android
+```
 
-Contributions are very welcome. Please check out the [contributing document](CONTRIBUTING.md).
+### Backend
 
-## :bookmark: License
+```bash
+cd backend
+cp .env.example .env       # fill in DATABASE_URL, ANTHROPIC_API_KEY, etc.
+uv sync
+uv run alembic upgrade head
+uv run python run_agent.py
+```
 
-This project is [MIT](LICENSE) licensed.
+API available at `http://localhost:8000`. Docs at `/docs`.
+
+---
+
+## Backend Agent Pipeline
+
+When `POST /sessions/{id}/end` is called:
+
+```
+IntakeAgent
+    │
+PoseAnalysisAgent
+    │
+    ├── FallRiskAgent ──┐  (parallel)
+    └── ReinjuryRiskAgent ─┘
+    │
+ReporterAgent
+    │
+ProgressAgent (if 3+ sessions)
+```
+
+Every agent output passes through the **HIPAA middleware** (`hipaa_wrap`) which:
+1. Scans for PHI using Microsoft Presidio
+2. Redacts any found entities
+3. Writes an entry to the `audit_log` table
+
+---
+
+## Environment Variables
+
+See `backend/.env.example` for all required variables:
+
+- `DATABASE_URL` — PostgreSQL async URL (`postgresql+asyncpg://...`)
+- `OPENAI_API_KEY` — OpenAI API key (used by all agents, model `gpt-4o`)
+- `JWT_SECRET` — Secret for signing JWT tokens
+- `CHROMA_PERSIST_DIR` — Path to ChromaDB persistence directory
+- `AGENTVERSE_MAILBOX_KEY` — uAgents Agentverse mailbox key
+
+---
+
+## Deployment (Railway)
+
+```bash
+# From repo root
+railway up
+```
+
+The `backend/Dockerfile` and `backend/railway.toml` handle everything. Health check at `GET /health`.
+
+---
+
+## Risk Score Methodology
+
+| Score | Source | Weight in Overall |
+|-------|--------|------------------|
+| Gait Regularity | Step rhythm consistency | 25% |
+| Balance Stability | Static sway detection | 20% |
+| Transition Safety | Sit-to-stand duration + wobble | 20% |
+| Lateral Sway | Hip swing amplitude | 20% |
+| Demographic Risk | Age, BMI, gender (intake) | 15% |
+
+Colour coding: Green ≥75 · Yellow 50–74 · Orange 25–49 · Red <25
+
+---
+
+## License
+
+MIT
