@@ -39,6 +39,7 @@ import {
   writeRecordingCsv,
   writeRepsCsvForSession,
   writeSessionSummaryJson,
+  buildRepsCsv,
 } from '../engine/csvLogger';
 import { ExercisePipeline } from '../engine/exercise/pipeline';
 import ScoreDashboard from '../components/ScoreDashboard';
@@ -173,35 +174,33 @@ export default function SessionScreen() {
     const result = analyzeRecording(frames, demographicRisk);
     await saveAnalysis(result);
 
-    // Persist every raw landmark frame to a CSV file in the app's Documents
-    // directory. result.id is an ISO timestamp string, so it's unique per run
-    // and matches the analysis entry shown on the dashboard.
-    if (frames.length > 0) {
-      try {
-        const path = await writeRecordingCsv(result.id, frames, mode);
-        console.log(`[SessionScreen] raw frames CSV saved → ${path}`);
-      } catch (e) {
-        console.warn('[SessionScreen] failed to write CSV:', (e as Error).message);
-      }
-    }
-
-    // Persist the per-rep CSV + session summary from the exercise pipeline.
+    // Exercise pipeline: finalize and log rep results.
+    // File writes (writeRecordingCsv, writeRepsCsvForSession, writeSessionSummaryJson)
+    // are currently no-ops — they return null until react-native-fs is installed.
+    // Rep data is logged to the console so it's visible in Metro / Flipper.
     const pipe = pipelineRef.current;
     if (pipe) {
       try {
         const session = pipe.finalize();
         if (session.reps.length > 0) {
-          const repsPath = await writeRepsCsvForSession(result.id, session.reps);
-          const jsonPath = await writeSessionSummaryJson(result.id, session);
           console.log(
-            `[SessionScreen] ${session.reps.length} reps → ${repsPath}, summary → ${jsonPath}`,
+            `[SessionScreen] ${session.reps.length} rep(s) detected — session summary:`,
+            JSON.stringify(session.summary),
           );
+          console.log('[SessionScreen] per-rep CSV:\n' + buildRepsCsv(session.reps));
+          // Attempt file writes (no-ops until react-native-fs pod is installed).
+          await writeRepsCsvForSession(result.id, session.reps);
+          await writeSessionSummaryJson(result.id, session);
         } else {
-          console.log('[SessionScreen] exercise pipeline detected 0 reps');
+          console.log('[SessionScreen] exercise pipeline: 0 reps detected this recording');
         }
       } catch (e) {
-        console.warn('[SessionScreen] failed to write reps CSV:', (e as Error).message);
+        console.warn('[SessionScreen] exercise pipeline error:', (e as Error).message);
       }
+    }
+    // Attempt raw frames write (no-op until react-native-fs pod is installed).
+    if (frames.length > 0) {
+      await writeRecordingCsv(result.id, frames, mode);
     }
 
     setRecordState('idle');
