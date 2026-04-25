@@ -35,13 +35,9 @@ import {
   saveAnalysis,
   RecordedFrame,
 } from '../engine/analyzeRecording';
-import {
-  writeRecordingCsv,
-  writeRepsCsvForSession,
-  writeSessionSummaryJson,
-  buildRepsCsv,
-} from '../engine/csvLogger';
+import { buildRepsCsv } from '../engine/csvLogger';
 import { ExercisePipeline } from '../engine/exercise/pipeline';
+import { sendSessionToLaptop } from '../engine/sessionSender';
 import ScoreDashboard from '../components/ScoreDashboard';
 import { POSE_HTML } from '../engine/poseHtml';
 
@@ -174,33 +170,24 @@ export default function SessionScreen() {
     const result = analyzeRecording(frames, demographicRisk);
     await saveAnalysis(result);
 
-    // Exercise pipeline: finalize and log rep results.
-    // File writes (writeRecordingCsv, writeRepsCsvForSession, writeSessionSummaryJson)
-    // are currently no-ops — they return null until react-native-fs is installed.
-    // Rep data is logged to the console so it's visible in Metro / Flipper.
+    // Exercise pipeline: finalize, log summary, and send to laptop receiver.
     const pipe = pipelineRef.current;
     if (pipe) {
       try {
         const session = pipe.finalize();
+        console.log(
+          `[SessionScreen] exercise pipeline: ${session.reps.length} rep(s)`,
+          JSON.stringify(session.summary),
+        );
         if (session.reps.length > 0) {
-          console.log(
-            `[SessionScreen] ${session.reps.length} rep(s) detected — session summary:`,
-            JSON.stringify(session.summary),
-          );
           console.log('[SessionScreen] per-rep CSV:\n' + buildRepsCsv(session.reps));
-          // Attempt file writes (no-ops until react-native-fs pod is installed).
-          await writeRepsCsvForSession(result.id, session.reps);
-          await writeSessionSummaryJson(result.id, session);
-        } else {
-          console.log('[SessionScreen] exercise pipeline: 0 reps detected this recording');
         }
+        // Send to the laptop receiver (node tools/session-receiver.js).
+        // No-ops silently if the receiver isn't running.
+        await sendSessionToLaptop(result.id, session, frames, mode);
       } catch (e) {
         console.warn('[SessionScreen] exercise pipeline error:', (e as Error).message);
       }
-    }
-    // Attempt raw frames write (no-op until react-native-fs pod is installed).
-    if (frames.length > 0) {
-      await writeRecordingCsv(result.id, frames, mode);
     }
 
     setRecordState('idle');
