@@ -17,9 +17,9 @@ import React, { useState, useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import IntakeScreen from './src/screens/IntakeScreen';
 import MainTabs from './src/navigation/MainTabs';
+import { loadStoredProfile } from './src/engine/profileStorage';
 
 /**
  * RootStackParamList — THE TWO TOP-LEVEL ROUTES
@@ -39,8 +39,8 @@ export default function App() {
   const [hasProfile, setHasProfile] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.getItem('sentinel_profile')
-      .then(raw => setHasProfile(!!raw))
+    loadStoredProfile()
+      .then(profile => setHasProfile(!!profile))
       .finally(() => setLoading(false));
   }, []);
 

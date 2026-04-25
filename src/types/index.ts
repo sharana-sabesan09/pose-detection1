@@ -34,12 +34,14 @@
  *                        0 = no demographic risk, 100 = maximum demographic risk.
  */
 export interface UserProfile {
+  patientId: string;
   age: number;
   gender: 'male' | 'female' | 'other';
   heightCm: number;
   weightKg: number;
   bmi: number;
   demographicRiskScore: number;
+  backendProfileSyncedAt?: string;
 }
 
 /**

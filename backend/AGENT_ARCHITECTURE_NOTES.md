@@ -23,6 +23,7 @@ Both sessions produced `overallRating: "poor"`. All reps across both sessions we
 | Raw landmark CSV was incompatible with `pose_frames` ingestion | **Fixed** | Mobile app now uploads frame-feature CSV (`frame,timestamp,knee_flex,...`) and backend parses it into `pose_frames` |
 | Production upload path lacked JWT auth | **Fixed** | React Native app now calls `POST /auth/token` before `POST /sessions/exercise-result` |
 | Anonymous exercise uploads could not create linked sessions | **Fixed** | `sessions.patient_id` is now nullable, matching the exercise schema's optional `patientId` |
+| Mobile users had no stable backend patient identity or patient-centric read model | **Fixed** | Intake now upserts `/patients/{patientId}`, session uploads reuse that ID, and the Results tab reads `/patients/{patientId}/overview` plus report endpoints |
 | `pose_analysis_agent` duplicates mobile work | **Deferred** | Still used for PT frame sessions; only exercise path bypasses it |
 | Agentverse path undocumented entry point | **Deferred** | HTTP pipeline is the active path; Agentverse remains optional |
 
@@ -190,7 +191,7 @@ No clinical PDFs have been ingested into ChromaDB. The RAG context in all agents
 
 Services communicate over Railway's private network. `sentinel-backend` connects to Postgres via `DATABASE_URL=postgresql://postgres:...@postgres.railway.internal:5432/railway` (rewritten to `postgresql+asyncpg://` by the `fix_db_scheme` validator in `config.py`).
 
-The `releaseCommand = "uv run alembic upgrade head"` in `railway.toml` runs Alembic migrations before each deploy is promoted to live traffic. Current schema includes migrations `0001` through `0004`, including linked sessions, uploaded exercise CSV artifacts, and nullable `sessions.patient_id` for anonymous exercise uploads.
+The `releaseCommand = "uv run alembic upgrade head"` in `railway.toml` runs Alembic migrations before each deploy is promoted to live traffic. Current schema includes migrations `0001` through `0005`, including linked sessions, uploaded exercise CSV artifacts, nullable `sessions.patient_id`, and patient metadata stored on `patients.metadata_json`.
 
 ---
 

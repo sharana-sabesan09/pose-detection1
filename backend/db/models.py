@@ -20,7 +20,9 @@ class Patient(Base):
     id = Column(String(36), primary_key=True, default=_uuid)
     name_encrypted = Column(Text, nullable=True)
     dob_encrypted = Column(Text, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     sessions = relationship("Session", back_populates="patient")
     accumulated_score = relationship("AccumulatedScore", back_populates="patient", uselist=False)

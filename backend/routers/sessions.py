@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from db.session import get_db
-from db.models import Session, PoseFrame, ExerciseSession, RepAnalysis
+from db.models import Session, PoseFrame, ExerciseSession, RepAnalysis, Patient
 from schemas.session import IntakeInput, ReporterOutput
 from schemas.report import SessionStartRequest, SessionStartResponse, FrameRequest
 from schemas.exercise import ExerciseSessionResult, ExerciseSessionResponse
@@ -16,12 +16,23 @@ from utils.frame_csv import parse_frame_features_csv
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
+async def _ensure_patient_exists(patient_id: str | None, db: AsyncSession) -> None:
+    if not patient_id:
+        return
+    existing = await db.execute(select(Patient).where(Patient.id == patient_id))
+    if existing.scalars().first():
+        return
+    db.add(Patient(id=patient_id, created_at=datetime.utcnow(), updated_at=datetime.utcnow()))
+    await db.flush()
+
+
 @router.post("/start", response_model=SessionStartResponse)
 async def start_session(
     body: SessionStartRequest,
     db: AsyncSession = Depends(get_db),
     _user=Depends(require_jwt),
 ):
+    await _ensure_patient_exists(body.patient_id, db)
     session = Session(
         id=str(uuid.uuid4()),
         patient_id=body.patient_id,
@@ -58,6 +69,7 @@ async def end_session(
     db: AsyncSession = Depends(get_db),
     _user=Depends(require_jwt),
 ):
+    await _ensure_patient_exists(body.patient_id, db)
     result = await db.execute(select(Session).where(Session.id == session_id))
     session = result.scalars().first()
     if not session:
@@ -91,6 +103,8 @@ async def store_exercise_result(
     )
     if existing.scalars().first():
         raise HTTPException(status_code=409, detail="Session already stored")
+
+    await _ensure_patient_exists(body.patientId, db)
 
     # Companion Session row so PoseFrame records (raw frames) have somewhere
     # to live and pose_analysis_agent can read them through the normal path.

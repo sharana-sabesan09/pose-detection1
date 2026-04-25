@@ -43,10 +43,11 @@ import {
   Platform,
   Alert,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { UserProfile } from '../types';
+import { upsertPatientProfile } from '../engine/backendClient';
+import { generatePatientId, saveStoredProfile } from '../engine/profileStorage';
 
 // The navigation prop gives this screen the ability to switch to another screen.
 // Specifically, after saving the profile we call navigation.replace('Session')
@@ -184,6 +185,7 @@ export default function IntakeScreen({ navigation }: Props) {
 
     // Build the complete profile object (matches the UserProfile interface in types/index.ts)
     const profile: UserProfile = {
+      patientId: generatePatientId(),
       age: ageNum,
       gender,
       heightCm: heightNum,
@@ -194,7 +196,13 @@ export default function IntakeScreen({ navigation }: Props) {
 
     // Save to the phone's local storage. This persists across app restarts.
     // Key: 'sentinel_profile' — the same key App.tsx checks on boot.
-    await AsyncStorage.setItem('sentinel_profile', JSON.stringify(profile));
+    try {
+      await upsertPatientProfile(profile);
+      profile.backendProfileSyncedAt = new Date().toISOString();
+    } catch (e) {
+      console.warn('[IntakeScreen] backend patient upsert failed:', (e as Error).message);
+    }
+    await saveStoredProfile(profile);
 
     // Navigate to Session. `replace` removes the Intake screen from the stack
     // so the back button doesn't bring the user back to the form.
@@ -238,7 +246,8 @@ export default function IntakeScreen({ navigation }: Props) {
             <Text style={styles.introTitle}>Before we begin</Text>
             <Text style={styles.introBody}>
               We need four data points to calibrate your risk scores. This is a one-time
-              setup — your information stays on this device and is never uploaded.
+              setup. Your profile is stored on this device and synced to your patient
+              record so sessions and progress stay linked over time.
             </Text>
           </View>
 
@@ -350,7 +359,7 @@ export default function IntakeScreen({ navigation }: Props) {
 
           {/* Privacy reassurance — important for medical apps */}
           <Text style={styles.privacy}>
-            All data stays on this device. Nothing is uploaded.
+            Your profile and session summaries sync to your patient record.
           </Text>
 
         </ScrollView>

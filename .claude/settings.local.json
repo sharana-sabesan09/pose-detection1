@@ -18,7 +18,11 @@
       "Bash(railway domain *)",
       "Bash(curl *)",
       "WebFetch(domain:ai.google.dev)",
-      "WebFetch(domain:developers.google.com)"
+      "WebFetch(domain:developers.google.com)",
+      "Bash(railway variables *)",
+      "Bash(echo \"exit: $?\")",
+      "WebSearch",
+      "WebFetch(domain:discuss.ai.google.dev)"
     ]
   }
 }

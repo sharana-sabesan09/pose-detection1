@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from rag.loader import load_clinical_guidelines
 from db.session import run_migrations
 import routers.auth as auth
+import routers.patients as patients
 import routers.sessions as sessions
 import routers.reports as reports
 import routers.exports as exports
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Sentinel Backend", lifespan=lifespan)
 
 app.include_router(auth.router)
+app.include_router(patients.router)
 app.include_router(sessions.router)
 app.include_router(reports.router)
 app.include_router(exports.router)

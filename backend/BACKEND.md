@@ -37,15 +37,18 @@ backend/
 │           ├── 0001_initial.py
 │           ├── 0002_exercise_sessions.py
 │           ├── 0003_exercise_linked_session.py
-│           └── 0004_exercise_artifacts_and_nullable_session_patient.py
+│           ├── 0004_exercise_artifacts_and_nullable_session_patient.py
+│           └── 0005_patient_metadata.py
 │
 ├── routers/
 │   ├── auth.py              JWT issue + require_jwt dependency
+│   ├── patients.py          Patient metadata upsert + patient overview read model
 │   ├── sessions.py          Session lifecycle + exercise result ingestion
 │   ├── reports.py           Latest report + progress report per patient
 │   └── exports.py           Dev-only: dump session artifacts to local disk
 │
 ├── schemas/
+│   ├── patient.py           Patient metadata + patient overview response models
 │   ├── session.py           Pydantic models for the PT agent pipeline I/O
 │   ├── report.py            SessionStart, FrameRequest, Token models
 │   └── exercise.py          Squat session schema (matches mobile output exactly)
@@ -77,6 +80,11 @@ backend/
 | `audit_log` | Append-only HIPAA audit trail |
 | `exercise_sessions` | Top-level squat (or other exercise) session, sent by mobile |
 | `rep_analyses` | One row per rep — all 12 biomechanical features as typed columns |
+
+`patients.metadata_json` stores the mobile intake profile
+(`age`, `gender`, `heightCm`, `weightKg`, `bmi`, `demographicRiskScore`).
+That makes the backend patient row the canonical metadata record instead of
+leaving the intake profile only on the phone.
 
 ### Exercise session schema
 
@@ -143,6 +151,14 @@ Token lifetime: 24 hours. Algorithm: HS256. Secret: `JWT_SECRET` env var.
 |--------|------|------|-------------|
 | POST | `/sessions/exercise-result` | JWT | Receive a complete processed session from the mobile app (squat etc.), persist the schema and uploaded CSV artifacts to `exercise_sessions`, rep rows to `rep_analyses`, and parsed frame-feature rows to `pose_frames` via a linked companion session. Returns 409 if the same `sessionId` was already stored. |
 
+### Patients
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| PUT | `/patients/{patient_id}` | JWT | Upsert the patient metadata record from the mobile intake flow |
+| GET | `/patients/{patient_id}` | JWT | Fetch the patient metadata record |
+| GET | `/patients/{patient_id}/overview` | JWT | Fetch patient metadata, accumulated scores, session count, and the recent session timeline |
+
 ### Reports
 
 | Method | Path | Auth | Description |
@@ -197,12 +213,13 @@ A single `db.commit()` at the end commits everything accumulated across all agen
 The mobile app uploads the already-processed exercise session schema and CSV
 artifacts. The backend then:
 
-1. creates a linked companion `sessions` row
-2. stores the uploaded envelope in `exercise_sessions`
-3. stores one row per rep in `rep_analyses`
-4. parses `frameFeaturesCsv` into `pose_frames`
-5. runs `exercise_reporter_agent` in the background
-6. runs `progress_agent` if the patient has 3+ linked sessions
+1. ensures the referenced patient exists
+2. creates a linked companion `sessions` row
+3. stores the uploaded envelope in `exercise_sessions`
+4. stores one row per rep in `rep_analyses`
+5. parses `frameFeaturesCsv` into `pose_frames`
+6. runs `exercise_reporter_agent` in the background
+7. runs `progress_agent` if the patient has 3+ linked sessions
 
 ### Agentverse path (`agentverse_agent.py` + `bureau.py`)
 

@@ -39,14 +39,14 @@ import { ExercisePipeline } from '../engine/exercise/pipeline';
 import {
   buildExportPayload,
   buildSessionJson,
-  postFramesToBackend,
   postSessionToBackend,
   shareSessionViaSheet,
 } from '../engine/exercise/exporter';
-import { buildLandmarkCsv } from '../engine/csvLogger';
 import { BACKEND_URL } from '../constants';
 import ScoreDashboard from '../components/ScoreDashboard';
 import { POSE_HTML } from '../engine/poseHtml';
+import { loadStoredProfile, saveStoredProfile } from '../engine/profileStorage';
+import { upsertPatientProfile } from '../engine/backendClient';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS + TYPES
@@ -96,8 +96,22 @@ export default function SessionScreen() {
 
   // ── Load user profile once ────────────────────────────────────────────────
   useEffect(() => {
-    AsyncStorage.getItem('sentinel_profile').then(raw => {
-      if (raw) profileRef.current = JSON.parse(raw) as UserProfile;
+    loadStoredProfile().then(async profile => {
+      if (!profile) return;
+      profileRef.current = profile;
+      if (!profile.backendProfileSyncedAt) {
+        try {
+          await upsertPatientProfile(profile);
+          const syncedProfile: UserProfile = {
+            ...profile,
+            backendProfileSyncedAt: new Date().toISOString(),
+          };
+          profileRef.current = syncedProfile;
+          await saveStoredProfile(syncedProfile);
+        } catch (e) {
+          console.warn('[SessionScreen] patient sync failed:', (e as Error).message);
+        }
+      }
     });
   }, []);
 
@@ -186,7 +200,14 @@ export default function SessionScreen() {
         const startedAt = recordStartedAtRef.current || (frames[0]?.t ?? Date.now());
         const endedAt   = frames[frames.length - 1]?.t ?? Date.now();
         const frameFeatures = pipe.getAllFrames();
-        const payload = buildExportPayload(result.id, startedAt, endedAt, session, frameFeatures);
+        const payload = buildExportPayload(
+          result.id,
+          startedAt,
+          endedAt,
+          session,
+          frameFeatures,
+          profileRef.current?.patientId ?? null,
+        );
 
         console.log(`[export] ${session.reps.length} rep(s):`, JSON.stringify(session.summary));
 
@@ -195,21 +216,17 @@ export default function SessionScreen() {
         const sessionJson = buildSessionJson(result.id, startedAt, endedAt, session);
         await AsyncStorage.setItem(`sentinel_schema_${result.id}`, sessionJson);
 
-        // ── 2a. Metro POST: session.json + reps.csv + reps.jsonl (small, fast) ─
+        // ── 2. Backend POST — persists to the patient-linked database flow ───
         const backendRes = await postSessionToBackend(BACKEND_URL, payload);
-        if (backendRes.ok && backendRes.writtenTo) {
-          console.log('[export] schema saved:', backendRes.writtenTo);
-          Alert.alert('Session exported', `Saved at:\n${backendRes.writtenTo}`);
-
-          // ── 2b. frames.csv — separate fire-and-forget POST (large, slow) ───
-          if (frames.length > 0) {
-            const framesCsv = buildLandmarkCsv(frames, mode);
-            postFramesToBackend(BACKEND_URL, payload.sessionId, backendRes.writtenTo, framesCsv)
-              .then(r => console.log('[export] frames.csv:', r.ok ? 'saved' : r.error))
-              .catch(e => console.error('[export] frames error:', e));
-          }
+        if (backendRes.ok) {
+          console.log('[export] session uploaded:', backendRes.linkedSessionId ?? backendRes.id);
+          Alert.alert(
+            'Session uploaded',
+            `Stored for patient ${profileRef.current?.patientId ?? 'unknown'}\n` +
+            `Session: ${backendRes.linkedSessionId ?? backendRes.id ?? '(stored)'}`,
+          );
         } else {
-          console.error('[export] Metro POST failed:', backendRes.error);
+          console.error('[export] backend upload failed:', backendRes.error);
           // ── 3. Share sheet fallback ─────────────────────────────────────────
           await shareSessionViaSheet(payload);
         }

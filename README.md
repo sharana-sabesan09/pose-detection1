@@ -89,6 +89,23 @@ dump. It is no longer the primary mobile upload path.
 
 ---
 
+## Patient Record Flow
+
+The app is now modeled around a persistent backend patient record, not just
+local phone storage:
+
+1. Intake creates a stable `patientId` on device.
+2. The app upserts patient metadata to `PUT /patients/{patientId}`.
+3. Session uploads include that same `patientId`.
+4. The backend stores many linked sessions for that patient over time.
+5. The Results tab reads the backend patient overview, latest report, and
+   progress trend so the UI reflects the actual longitudinal record.
+
+The phone still keeps a local analysis cache for offline fallback, but the
+authoritative patient timeline now lives in the backend.
+
+---
+
 ## Backend Agent Pipeline
 
 Each agent is a proper Fetch.ai **uAgent** with its own identity, running inside a shared `Bureau`. The `physio-orchestrator` is the only agent exposed to Agentverse (via mailbox key); sub-agents are local and communicate via typed messages.
