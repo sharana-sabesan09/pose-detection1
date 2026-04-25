@@ -40,9 +40,15 @@ import {
   buildExportPayload,
   buildSessionJson,
   postSessionToBackend,
+  postSessionToLocalExports,
   shareSessionViaSheet,
 } from '../engine/exercise/exporter';
+<<<<<<< HEAD
 import { BACKEND_URL } from '../constants';
+=======
+import { buildLandmarkCsv } from '../engine/csvLogger';
+import { BACKEND_URL, LOCAL_EXPORTS_URL } from '../constants';
+>>>>>>> f21d0e4bb2461f46d0bc52eee75fab9d1585a505
 import ScoreDashboard from '../components/ScoreDashboard';
 import { POSE_HTML } from '../engine/poseHtml';
 import { loadStoredProfile, saveStoredProfile } from '../engine/profileStorage';
@@ -199,6 +205,7 @@ export default function SessionScreen() {
         const session   = pipe.finalize();
         const startedAt = recordStartedAtRef.current || (frames[0]?.t ?? Date.now());
         const endedAt   = frames[frames.length - 1]?.t ?? Date.now();
+<<<<<<< HEAD
         const frameFeatures = pipe.getAllFrames();
         const payload = buildExportPayload(
           result.id,
@@ -208,6 +215,10 @@ export default function SessionScreen() {
           frameFeatures,
           profileRef.current?.patientId ?? null,
         );
+=======
+        const frameFeatures = pipe.getFrameBuffer();
+        const payload = buildExportPayload(result.id, startedAt, endedAt, session, frameFeatures);
+>>>>>>> f21d0e4bb2461f46d0bc52eee75fab9d1585a505
 
         console.log(`[export] ${session.reps.length} rep(s):`, JSON.stringify(session.summary));
 
@@ -216,6 +227,7 @@ export default function SessionScreen() {
         const sessionJson = buildSessionJson(result.id, startedAt, endedAt, session);
         await AsyncStorage.setItem(`sentinel_schema_${result.id}`, sessionJson);
 
+<<<<<<< HEAD
         // ── 2. Backend POST — persists to the patient-linked database flow ───
         const backendRes = await postSessionToBackend(BACKEND_URL, payload);
         if (backendRes.ok) {
@@ -228,6 +240,43 @@ export default function SessionScreen() {
         } else {
           console.error('[export] backend upload failed:', backendRes.error);
           // ── 3. Share sheet fallback ─────────────────────────────────────────
+=======
+        // ── 2. Backend POST to Railway /sessions/exercise-result ────────────
+        const framesCsv = buildLandmarkCsv(frames, mode);
+
+        // 2a) MUST-HAVE local artifacts in root /exports via local backend.
+        const localExportRes = await postSessionToLocalExports(LOCAL_EXPORTS_URL, payload, framesCsv);
+        if (localExportRes.ok) {
+          console.log('[export] local artifacts saved:', localExportRes.writtenTo, localExportRes.files);
+        } else {
+          console.warn('[export] local artifact write failed:', localExportRes.error);
+        }
+
+        // 2b) Railway/Postgres ingest (non-fatal if it fails).
+        const backendRes = await postSessionToBackend(BACKEND_URL, payload);
+        if (backendRes.ok) {
+          console.log('[export] session stored:', backendRes.id, backendRes.linkedSessionId);
+          if (localExportRes.ok && localExportRes.writtenTo) {
+            Alert.alert(
+              'Session exported',
+              `Railway upload succeeded.\nLocal files saved at:\n${localExportRes.writtenTo}`,
+            );
+          } else {
+            Alert.alert('Session exported', 'Uploaded successfully to backend.');
+          }
+        } else {
+          const detail = backendRes.detail ?? backendRes.error ?? 'Unknown backend error';
+          console.error('[export] backend POST failed:', detail);
+          // Non-fatal: report error, continue session flow, and offer manual share.
+          if (localExportRes.ok && localExportRes.writtenTo) {
+            Alert.alert(
+              'Railway upload failed (non-fatal)',
+              `${detail}\n\nLocal export is saved at:\n${localExportRes.writtenTo}`,
+            );
+          } else {
+            Alert.alert('Backend export failed', detail);
+          }
+>>>>>>> f21d0e4bb2461f46d0bc52eee75fab9d1585a505
           await shareSessionViaSheet(payload);
         }
 

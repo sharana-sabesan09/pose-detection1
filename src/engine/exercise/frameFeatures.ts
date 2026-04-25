@@ -228,19 +228,19 @@ export function computeFrameFeatures(
   const leftVis  = legVisibility(leftLeg);
   const rightVis = legVisibility(rightLeg);
 
-  // Foot height: lower y = higher on screen = lifted.
-  // For unilateral exercises, pick the lifted foot's side (the working leg).
-  // For bilateral, both feet are at similar height → fall back to visibility.
+  // Foot height in normalised space (larger y = lower on screen = closer to floor).
+  // For a single-leg squat the lifted foot has SMALLER y; the standing foot has LARGER y.
+  // We want the STANDING leg — the one whose foot is lower on screen (larger y).
   const leftFootY  = footHeight(leftLeg);
   const rightFootY = footHeight(rightLeg);
-  const footHeightDiff = rightFootY - leftFootY; // positive = left foot higher (lifted)
+  // footHeightDiff > 0 → right foot is lower on screen (standing) → dominant = right
+  // footHeightDiff < 0 → left foot is lower on screen (standing)  → dominant = left
+  const footHeightDiff = rightFootY - leftFootY;
 
-  // If one foot is noticeably lifted (>0.1 pelvis-widths), that's the working leg.
-  // Otherwise, pick based on visibility (what the camera sees best).
   let dominantSide: Side;
   if (Math.abs(footHeightDiff) > 0.1) {
-    // Unilateral: left foot lifted if footHeightDiff > 0
-    dominantSide = footHeightDiff > 0 ? 'left' : 'right';
+    // Unilateral: pick the leg whose foot is on the floor (larger y = lower on screen).
+    dominantSide = footHeightDiff > 0 ? 'right' : 'left';
   } else {
     // Bilateral or neutral: use visibility
     dominantSide = leftVis >= rightVis ? 'left' : 'right';
