@@ -1,0 +1,21 @@
+{
+  "sessionId": "2026-04-25T22:02:25.839Z",
+  "startedAtMs": 1777154521902,
+  "endedAtMs": 1777154545820,
+  "durationMs": 23918,
+  "exercise": "squat",
+  "numReps": 0,
+  "summary": {
+    "exercise": "squat",
+    "reps": [],
+    "summary": {
+      "numReps": 0,
+      "avgDepth": 0,
+      "minDepth": 0,
+      "avgFppa": 0,
+      "maxFppa": 0,
+      "consistency": 0,
+      "overallRating": "poor"
+    }
+  }
+}

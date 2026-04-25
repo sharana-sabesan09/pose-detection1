@@ -20,11 +20,21 @@ export const MODEL_KEY = 'a2ee025f302841a2b178883c361b4285';
 // Until this is set, the app runs in simulation mode (fake landmarks, real UI).
 export const POSE_MODEL_KEY = 'a2ee025f302841a2b178883c361b4285';
 
-// Where the phone POSTs completed exercise sessions at end-of-recording.
-// The app now uses the production ingest route:
+// Production backend (Railway/Postgres):
 //   POST <BACKEND_URL>/auth/token
 //   POST <BACKEND_URL>/sessions/exercise-result
 //
-// Use your laptop's LAN IP + FastAPI port for local dev, or Railway in prod.
-// Set to '' to disable backend upload and use only the iOS share sheet.
+// Set to '' to disable backend upload and use only local/share fallbacks.
 export const BACKEND_URL = 'https://sentinel-backend-production-e75a.up.railway.app';
+
+// Local backend (dev) used to write artifact files into repo root:
+//   POST <LOCAL_EXPORTS_URL>/exports/session
+// Writes:
+//   exports/<timestamp>_<session_id>/session.json
+//   exports/<timestamp>_<session_id>/reps.jsonl
+//   exports/<timestamp>_<session_id>/reps.csv
+//   exports/<timestamp>_<session_id>/frames.csv
+//
+// IMPORTANT: This points to Metro's custom middleware (Node), not Python.
+// Keep Metro running for local exports.
+export const LOCAL_EXPORTS_URL = 'http://10.30.120.54:8081';

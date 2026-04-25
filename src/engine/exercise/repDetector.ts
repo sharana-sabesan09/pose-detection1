@@ -26,18 +26,15 @@ export interface RepRange {
   endIdx:    number;   // frame person returned to standing
 }
 
-export const HIP_DETECT = {
-  /** Exponential smoothing factor for the standing baseline. Small = slow adapt. */
-  BASELINE_ALPHA: 0.02,
-
-  /** Minimum hip descent relative to baseline to trigger a squat (screen-fraction). */
-  AMP_THRESH: 0.01,
-
+export const KNEE_DETECT = {
   /** Rolling-mean window (frames) applied before thresholding. */
   SMOOTH_WINDOW: 7,
 
   /** Minimum frames a squat phase must span to count as a rep. */
   MIN_REP_FRAMES: 8,
+
+  /** Small hysteresis band above stand threshold to avoid flicker near top. */
+  STAND_HYSTERESIS_DEG: 3,
 } as const;
 
 function rollingMean(arr: number[], window: number): number[] {
@@ -54,7 +51,8 @@ function rollingMean(arr: number[], window: number): number[] {
 export function detectRepRanges(frames: FrameFeatures[]): RepRange[] {
   if (frames.length < 20) return [];
 
-  const smoothed = rollingMean(frames.map(f => f.kneeFlexion), HIP_DETECT.SMOOTH_WINDOW);
+  const smoothed = rollingMean(frames.map(f => f.kneeFlexion), KNEE_DETECT.SMOOTH_WINDOW);
+  const standGate = REP_THRESHOLDS.STAND_KNEE_DEG + KNEE_DETECT.STAND_HYSTERESIS_DEG;
 
   const reps: RepRange[] = [];
   let inSquat   = false;
@@ -67,6 +65,7 @@ export function detectRepRanges(frames: FrameFeatures[]): RepRange[] {
     const dAngle = i > 0 ? smoothed[i] - smoothed[i - 1] : 0;
 
     if (!inSquat) {
+      // Enter squat: knee must be bending AND already past the trigger threshold.
       if (angle >= REP_THRESHOLDS.DESCENT_TRIGGER_DEG && dAngle > 0) {
         inSquat   = true;
         startIdx  = i;
@@ -74,10 +73,15 @@ export function detectRepRanges(frames: FrameFeatures[]): RepRange[] {
         peakFlex  = angle;
       }
     } else {
-      if (angle > peakFlex) { peakFlex = angle; bottomIdx = i; }
-
-      if (angle <= REP_THRESHOLDS.STAND_KNEE_DEG) {
-        if (i - startIdx >= HIP_DETECT.MIN_REP_FRAMES) {
+      // Track the true peak throughout the whole squat — jitter during descent
+      // or a momentary direction reversal no longer ends the rep early.
+      if (angle > peakFlex) {
+        peakFlex  = angle;
+        bottomIdx = i;
+      }
+      // Rep ends only when the knee has genuinely returned to near-standing.
+      if (angle <= standGate) {
+        if (i - startIdx >= KNEE_DETECT.MIN_REP_FRAMES) {
           reps.push({ startIdx, bottomIdx, endIdx: i });
         }
         inSquat  = false;

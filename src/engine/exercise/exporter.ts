@@ -103,8 +103,11 @@ export function buildExportPayload(
 export interface BackendExportResult {
   ok:        boolean;
   status?:   number;
-  id?:        string;
+  id?: string;
   linkedSessionId?: string;
+  writtenTo?: string;
+  files?: string[];
+  detail?:   string;
   error?:    string;
 }
 
@@ -131,7 +134,7 @@ async function getBackendToken(baseUrl: string, timeoutMs: number): Promise<stri
       throw new Error('token response missing access_token');
     }
     cachedAccessToken = data.access_token;
-    return cachedAccessToken;
+    return data.access_token as string;
   } finally {
     clearTimeout(timer);
   }
@@ -155,17 +158,7 @@ export async function postSessionToBackend(
 ): Promise<BackendExportResult> {
   if (!baseUrl) return { ok: false, error: 'no backend URL configured' };
 
-  const url = baseUrl.replace(/\/+$/, '') + '/exports/session';
-
-  const summaryJson = JSON.stringify({
-    sessionId:   payload.sessionId,
-    startedAtMs: payload.startedAtMs,
-    endedAtMs:   payload.endedAtMs,
-    durationMs:  payload.durationMs,
-    exercise:    payload.exercise,
-    numReps:     payload.numReps,
-    summary:     payload.summary,
-  });
+  const url = baseUrl.replace(/\/+$/, '') + '/sessions/exercise-result';
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -174,19 +167,107 @@ export async function postSessionToBackend(
     const token = await getBackendToken(baseUrl, timeoutMs);
     const res = await fetch(url, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body:    JSON.stringify({
-        session_id:   payload.sessionId,
-        summary_json: summaryJson,
-        reps_csv:     payload.repsCsv,
-        reps_jsonl:   payload.repsJsonl,
+        sessionId: payload.sessionId,
+        startedAtMs: payload.startedAtMs,
+        endedAtMs: payload.endedAtMs,
+        durationMs: payload.durationMs,
+        exercise: payload.exercise,
+        numReps: payload.numReps,
+        summary: payload.summary,
+        patientId: payload.patientId ?? null,
+        repsCsv: payload.repsCsv,
+        frameFeaturesCsv: payload.frameFeaturesCsv,
       }),
       signal: controller.signal,
     });
     clearTimeout(timer);
-    if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    if (!res.ok) {
+      const raw = await res.text().catch(() => '');
+      const trimmed = raw.trim();
+      let detail = trimmed;
+      try {
+        const parsed = trimmed ? JSON.parse(trimmed) : null;
+        if (parsed?.detail) detail = String(parsed.detail);
+      } catch {
+        // keep raw text fallback
+      }
+      return {
+        ok: false,
+        status: res.status,
+        detail: detail || undefined,
+        error: detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`,
+      };
+    }
     const data = await res.json().catch(() => ({}));
-    return { ok: true, status: res.status, writtenTo: data?.written_to, files: data?.files };
+    return {
+      ok: true,
+      status: res.status,
+      id: data?.id,
+      linkedSessionId: data?.linkedSessionId,
+    };
+  } catch (e) {
+    clearTimeout(timer);
+    cachedAccessToken = null;
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * Local dev export path — writes artifacts to backend repo's /exports folder.
+ * This is intentionally independent from Railway/Postgres ingest.
+ */
+export async function postSessionToLocalExports(
+  baseUrl: string | null | undefined,
+  payload: SessionExportPayload,
+  framesCsv?: string,
+  timeoutMs = 15000,
+): Promise<BackendExportResult> {
+  if (!baseUrl) return { ok: false, error: 'no local exports URL configured' };
+
+  const url = baseUrl.replace(/\/+$/, '') + '/exports/session';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: payload.sessionId,
+        summary_json: buildSessionJson(
+          payload.sessionId,
+          payload.startedAtMs,
+          payload.endedAtMs,
+          payload.summary,
+        ),
+        reps_csv: payload.repsCsv,
+        reps_jsonl: payload.repsJsonl,
+        frames_csv: framesCsv ?? payload.frameFeaturesCsv,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      const raw = await res.text().catch(() => '');
+      return {
+        ok: false,
+        status: res.status,
+        detail: raw || undefined,
+        error: raw ? `HTTP ${res.status}: ${raw}` : `HTTP ${res.status}`,
+      };
+    }
+    const data = await res.json().catch(() => ({}));
+    return {
+      ok: true,
+      status: res.status,
+      writtenTo: data?.written_to,
+      files: data?.files,
+    };
   } catch (e) {
     clearTimeout(timer);
     return { ok: false, error: (e as Error).message };
@@ -220,11 +301,10 @@ export async function postFramesToBackend(
     });
     clearTimeout(timer);
     if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
-    const data = await res.json().catch(() => ({}));
-    return { ok: true, status: res.status, writtenTo: data?.written };
+    await res.json().catch(() => ({}));
+    return { ok: true, status: res.status };
   } catch (e) {
     clearTimeout(timer);
-    cachedAccessToken = null;
     return { ok: false, error: (e as Error).message };
   }
 }

@@ -39,12 +39,12 @@ import { ExercisePipeline } from '../engine/exercise/pipeline';
 import {
   buildExportPayload,
   buildSessionJson,
-  postFramesToBackend,
   postSessionToBackend,
+  postSessionToLocalExports,
   shareSessionViaSheet,
 } from '../engine/exercise/exporter';
 import { buildLandmarkCsv } from '../engine/csvLogger';
-import { BACKEND_URL } from '../constants';
+import { BACKEND_URL, LOCAL_EXPORTS_URL } from '../constants';
 import ScoreDashboard from '../components/ScoreDashboard';
 import { POSE_HTML } from '../engine/poseHtml';
 
@@ -185,7 +185,7 @@ export default function SessionScreen() {
         const session   = pipe.finalize();
         const startedAt = recordStartedAtRef.current || (frames[0]?.t ?? Date.now());
         const endedAt   = frames[frames.length - 1]?.t ?? Date.now();
-        const frameFeatures = pipe.getAllFrames();
+        const frameFeatures = pipe.getFrameBuffer();
         const payload = buildExportPayload(result.id, startedAt, endedAt, session, frameFeatures);
 
         console.log(`[export] ${session.reps.length} rep(s):`, JSON.stringify(session.summary));
@@ -195,22 +195,41 @@ export default function SessionScreen() {
         const sessionJson = buildSessionJson(result.id, startedAt, endedAt, session);
         await AsyncStorage.setItem(`sentinel_schema_${result.id}`, sessionJson);
 
-        // ── 2a. Metro POST: session.json + reps.csv + reps.jsonl (small, fast) ─
-        const backendRes = await postSessionToBackend(BACKEND_URL, payload);
-        if (backendRes.ok && backendRes.writtenTo) {
-          console.log('[export] schema saved:', backendRes.writtenTo);
-          Alert.alert('Session exported', `Saved at:\n${backendRes.writtenTo}`);
+        // ── 2. Backend POST to Railway /sessions/exercise-result ────────────
+        const framesCsv = buildLandmarkCsv(frames, mode);
 
-          // ── 2b. frames.csv — separate fire-and-forget POST (large, slow) ───
-          if (frames.length > 0) {
-            const framesCsv = buildLandmarkCsv(frames, mode);
-            postFramesToBackend(BACKEND_URL, payload.sessionId, backendRes.writtenTo, framesCsv)
-              .then(r => console.log('[export] frames.csv:', r.ok ? 'saved' : r.error))
-              .catch(e => console.error('[export] frames error:', e));
+        // 2a) MUST-HAVE local artifacts in root /exports via local backend.
+        const localExportRes = await postSessionToLocalExports(LOCAL_EXPORTS_URL, payload, framesCsv);
+        if (localExportRes.ok) {
+          console.log('[export] local artifacts saved:', localExportRes.writtenTo, localExportRes.files);
+        } else {
+          console.warn('[export] local artifact write failed:', localExportRes.error);
+        }
+
+        // 2b) Railway/Postgres ingest (non-fatal if it fails).
+        const backendRes = await postSessionToBackend(BACKEND_URL, payload);
+        if (backendRes.ok) {
+          console.log('[export] session stored:', backendRes.id, backendRes.linkedSessionId);
+          if (localExportRes.ok && localExportRes.writtenTo) {
+            Alert.alert(
+              'Session exported',
+              `Railway upload succeeded.\nLocal files saved at:\n${localExportRes.writtenTo}`,
+            );
+          } else {
+            Alert.alert('Session exported', 'Uploaded successfully to backend.');
           }
         } else {
-          console.error('[export] Metro POST failed:', backendRes.error);
-          // ── 3. Share sheet fallback ─────────────────────────────────────────
+          const detail = backendRes.detail ?? backendRes.error ?? 'Unknown backend error';
+          console.error('[export] backend POST failed:', detail);
+          // Non-fatal: report error, continue session flow, and offer manual share.
+          if (localExportRes.ok && localExportRes.writtenTo) {
+            Alert.alert(
+              'Railway upload failed (non-fatal)',
+              `${detail}\n\nLocal export is saved at:\n${localExportRes.writtenTo}`,
+            );
+          } else {
+            Alert.alert('Backend export failed', detail);
+          }
           await shareSessionViaSheet(payload);
         }
 
