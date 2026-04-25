@@ -1,53 +1,66 @@
 /**
- * src/engine/csvLogger.ts — RAW POSE FRAME CSV PERSISTENCE
+ * src/engine/csvLogger.ts — RAW POSE FRAME + REP CSV PERSISTENCE
  *
- * Writes every captured pose frame from a recording session to a CSV file
- * inside the app's persistent Documents directory.
+ * Writes session data to the device's Documents directory.
  *
- *   Documents/sentinel_sessions/<sessionId>.csv
+ *   Documents/sentinel_sessions/<sessionId>.csv        — raw landmarks
+ *   Documents/sentinel_sessions/<sessionId>_reps.csv   — per-rep summary
+ *   Documents/sentinel_sessions/<sessionId>_session.json
  *
- * The CSV format is "wide" — one row per frame, with all 33 MediaPipe
- * landmarks flattened across the columns:
+ * NATIVE MODULE STRATEGY:
+ *   This file uses @dr.pogodin/react-native-fs BUT only via a lazy require()
+ *   inside each async function — never at module import time. That means:
  *
- *   t,mode,lm0_x,lm0_y,lm0_z,lm0_v,lm1_x,...,lm32_v
- *
- * That's 2 metadata columns + 33 × 4 = 134 columns total.
- *
- * SIZE NOTE:
- *   At ~30fps with each value rounded to 4 decimals, one frame is roughly
- *   1.2 KB of CSV text. 60 seconds → ~2 MB per recording. A few hundred
- *   recordings comfortably fit in local app storage.
- *
- * WHY WIDE FORMAT (not long):
- *   It matches the natural per-frame analysis already done in
- *   analyzeRecording.ts — one row, one moment in time. Easier to load into
- *   pandas, R, Excel, etc. without a pivot.
+ *   • If the app was built WITHOUT pod install (native side missing), every
+ *     call gracefully catches and logs a warning. The app keeps running.
+ *   • If the pod IS installed, writes work as normal.
+ *   • No top-level RNFS reference that could crash the module on startup.
  */
 
-import RNFS from '@dr.pogodin/react-native-fs';
 import { PoseFrame, SessionMode } from '../types';
 import { RecordedFrame } from './analyzeRecording';
 import { RepFeatures, SessionSummary } from './exercise/types';
 import { buildRepsCsv } from './exercise/csvWriter';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTS
+// RNFS lazy accessor — never call at module scope
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Folder under Documents/ that holds one CSV per recording session. */
-const SESSIONS_DIR = `${RNFS.DocumentDirectoryPath}/sentinel_sessions`;
+function getRNFS(): typeof import('@dr.pogodin/react-native-fs').default | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('@dr.pogodin/react-native-fs');
+    return mod?.default ?? mod ?? null;
+  } catch {
+    return null;
+  }
+}
 
-/** MediaPipe Pose returns 33 landmarks per frame. */
+/** Documents/sentinel_sessions — resolved lazily so nothing fires at import time. */
+function getSessionsDir(): string | null {
+  const RNFS = getRNFS();
+  if (!RNFS || !RNFS.DocumentDirectoryPath) return null;
+  return `${RNFS.DocumentDirectoryPath}/sentinel_sessions`;
+}
+
+/** Idempotent directory creation. Returns false if RNFS not available. */
+async function ensureSessionsDir(): Promise<string | null> {
+  const RNFS = getRNFS();
+  const dir = getSessionsDir();
+  if (!RNFS || !dir) return null;
+  const exists = await RNFS.exists(dir);
+  if (!exists) await RNFS.mkdir(dir);
+  return dir;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LANDMARK CSV (raw frames)
+// ─────────────────────────────────────────────────────────────────────────────
+
 const LANDMARK_COUNT = 33;
-
-/** Float precision in the CSV. 4 decimals = ~0.1px on a 1080p frame. */
 const DECIMALS = 4;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HEADER
-// ─────────────────────────────────────────────────────────────────────────────
-
-function buildHeader(): string {
+function buildLandmarkHeader(): string {
   const cols = ['t', 'mode'];
   for (let i = 0; i < LANDMARK_COUNT; i++) {
     cols.push(`lm${i}_x`, `lm${i}_y`, `lm${i}_z`, `lm${i}_v`);
@@ -55,13 +68,8 @@ function buildHeader(): string {
   return cols.join(',');
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ROW FORMATTING
-// ─────────────────────────────────────────────────────────────────────────────
-
 function fmt(n: number): string {
-  if (!Number.isFinite(n)) return '';
-  return n.toFixed(DECIMALS);
+  return Number.isFinite(n) ? n.toFixed(DECIMALS) : '';
 }
 
 function frameToRow(t: number, mode: SessionMode, pose: PoseFrame): string {
@@ -77,72 +85,100 @@ function frameToRow(t: number, mode: SessionMode, pose: PoseFrame): string {
   return cells.join(',');
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PUBLIC API
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Make sure Documents/sentinel_sessions/ exists. Idempotent. */
-async function ensureSessionsDir(): Promise<void> {
-  const exists = await RNFS.exists(SESSIONS_DIR);
-  if (!exists) {
-    await RNFS.mkdir(SESSIONS_DIR);
-  }
-}
-
-/** Absolute path of the CSV file for a given session id. */
-export function csvPathFor(sessionId: string): string {
-  // Replace characters that are awkward on iOS/Android filesystems
-  // (colons from ISO timestamps).
-  const safe = sessionId.replace(/[^A-Za-z0-9_.-]/g, '_');
-  return `${SESSIONS_DIR}/${safe}.csv`;
+/** Safe path for a given session id (strips characters iOS/Android dislike). */
+function safeName(sessionId: string): string {
+  return sessionId.replace(/[^A-Za-z0-9_.-]/g, '_');
 }
 
 /**
- * writeRecordingCsv — DUMP AN ENTIRE RECORDED SESSION TO A CSV FILE
- *
- * Called from SessionScreen.finishRecording right after the recording stops.
- * Writes the full set of {t, pose} frames in one bulk write — much faster
- * and safer than appending per frame.
- *
- * @param sessionId  Unique id (we use the AnalysisResult.id ISO timestamp)
- * @param frames     The raw recorded frames captured during the session
- * @param mode       The session mode active when recording started
- * @returns          Absolute path of the written CSV
+ * writeRecordingCsv — persist raw landmark frames for a session.
+ * No-ops silently if RNFS native module is not linked.
  */
 export async function writeRecordingCsv(
   sessionId: string,
   frames: RecordedFrame[],
   mode: SessionMode,
-): Promise<string> {
-  await ensureSessionsDir();
+): Promise<string | null> {
+  const RNFS = getRNFS();
+  const dir = await ensureSessionsDir();
+  if (!RNFS || !dir) {
+    console.warn('[csvLogger] react-native-fs not available — skipping raw CSV write');
+    return null;
+  }
 
-  const path = csvPathFor(sessionId);
-  const header = buildHeader();
-
-  // Build the body in one string. ~2 MB for a 60s recording — fine for memory.
-  const lines: string[] = [header];
+  const path = `${dir}/${safeName(sessionId)}.csv`;
+  const lines: string[] = [buildLandmarkHeader()];
   for (const { t, pose } of frames) {
     lines.push(frameToRow(t, mode, pose));
   }
-  const csv = lines.join('\n') + '\n';
-
-  await RNFS.writeFile(path, csv, 'utf8');
+  await RNFS.writeFile(path, lines.join('\n') + '\n', 'utf8');
   return path;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-REP CSV
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * listSessionCsvs — RETURN METADATA FOR EVERY SAVED RECORDING
- *
- * Useful for debug screens, manual export, or future "upload to backend"
- * sync jobs. Returns newest first.
+ * writeRepsCsvForSession — persist per-rep features from the exercise pipeline.
+ * No-ops silently if RNFS native module is not linked.
  */
+export async function writeRepsCsvForSession(
+  sessionId: string,
+  reps: RepFeatures[],
+): Promise<string | null> {
+  const RNFS = getRNFS();
+  const dir = await ensureSessionsDir();
+  if (!RNFS || !dir) {
+    console.warn('[csvLogger] react-native-fs not available — skipping reps CSV write');
+    return null;
+  }
+
+  const path = `${dir}/${safeName(sessionId)}_reps.csv`;
+  await RNFS.writeFile(path, buildRepsCsv(reps), 'utf8');
+  return path;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SESSION SUMMARY JSON
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * writeSessionSummaryJson — persist the structured session summary.
+ * No-ops silently if RNFS native module is not linked.
+ */
+export async function writeSessionSummaryJson(
+  sessionId: string,
+  summary: SessionSummary,
+): Promise<string | null> {
+  const RNFS = getRNFS();
+  const dir = await ensureSessionsDir();
+  if (!RNFS || !dir) {
+    console.warn('[csvLogger] react-native-fs not available — skipping session JSON write');
+    return null;
+  }
+
+  const path = `${dir}/${safeName(sessionId)}_session.json`;
+  await RNFS.writeFile(path, JSON.stringify(summary, null, 2), 'utf8');
+  return path;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UTILITY
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** List every saved CSV in the sessions folder, newest first. */
 export async function listSessionCsvs(): Promise<
   { name: string; path: string; size: number; mtime: Date | null }[]
 > {
-  const exists = await RNFS.exists(SESSIONS_DIR);
+  const RNFS = getRNFS();
+  const dir = getSessionsDir();
+  if (!RNFS || !dir) return [];
+
+  const exists = await RNFS.exists(dir);
   if (!exists) return [];
 
-  const items = await RNFS.readDir(SESSIONS_DIR);
+  const items = await RNFS.readDir(dir);
   return items
     .filter(i => i.isFile() && i.name.endsWith('.csv'))
     .map(i => ({
@@ -154,45 +190,16 @@ export async function listSessionCsvs(): Promise<
     .sort((a, b) => (b.mtime?.getTime() ?? 0) - (a.mtime?.getTime() ?? 0));
 }
 
-/**
- * writeRepsCsvForSession — write the per-rep CSV emitted by the exercise
- * pipeline next to the raw frames CSV for the same session id. Filename
- *
- *   <sessionId>_reps.csv
- *
- * Produced from `pipeline.finalize().reps` after recording stops.
- */
-export async function writeRepsCsvForSession(
-  sessionId: string,
-  reps: RepFeatures[],
-): Promise<string> {
-  await ensureSessionsDir();
-  const safe = sessionId.replace(/[^A-Za-z0-9_.-]/g, '_');
-  const path = `${SESSIONS_DIR}/${safe}_reps.csv`;
-  await RNFS.writeFile(path, buildRepsCsv(reps), 'utf8');
-  return path;
-}
-
-/**
- * writeSessionSummaryJson — store the structured session summary alongside
- * the CSVs as `<sessionId>_session.json`. Useful for the dashboard later.
- */
-export async function writeSessionSummaryJson(
-  sessionId: string,
-  summary: SessionSummary,
-): Promise<string> {
-  await ensureSessionsDir();
-  const safe = sessionId.replace(/[^A-Za-z0-9_.-]/g, '_');
-  const path = `${SESSIONS_DIR}/${safe}_session.json`;
-  await RNFS.writeFile(path, JSON.stringify(summary, null, 2), 'utf8');
-  return path;
-}
-
-/** Delete every recording CSV. Useful for "clear data" actions. */
+/** Delete all CSVs from the sessions folder. */
 export async function clearAllSessionCsvs(): Promise<void> {
-  const exists = await RNFS.exists(SESSIONS_DIR);
+  const RNFS = getRNFS();
+  const dir = getSessionsDir();
+  if (!RNFS || !dir) return;
+
+  const exists = await RNFS.exists(dir);
   if (!exists) return;
-  const items = await RNFS.readDir(SESSIONS_DIR);
+
+  const items = await RNFS.readDir(dir);
   await Promise.all(
     items.filter(i => i.isFile() && i.name.endsWith('.csv')).map(i => RNFS.unlink(i.path)),
   );
