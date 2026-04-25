@@ -120,7 +120,7 @@ Output only valid JSON."""
         )
         db.add(score_row)
 
-    await db.commit()
+    await db.flush()
     await write_audit("reporter_agent", "generate_report", patient_id, "session_report", db)
     return output
 

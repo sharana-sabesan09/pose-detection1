@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from schemas.session import IntakeInput
@@ -31,6 +30,7 @@ async def run_session_pipeline(
         logger.error("intake agent failed: %s", e)
         failed_agents.append("intake")
         await write_audit("orchestrator", "pipeline_error", patient_id, "intake", db)
+        await db.commit()
         return {"failed_agents": failed_agents, **results}
 
     try:
@@ -40,18 +40,21 @@ async def run_session_pipeline(
         logger.error("pose_analysis agent failed: %s", e)
         failed_agents.append("pose_analysis")
         await write_audit("orchestrator", "pipeline_error", patient_id, "pose_analysis", db)
+        await db.commit()
         return {"failed_agents": failed_agents, **results}
 
     try:
-        fall_task = run_fall_risk(intake_output, pose_output, patient_id, session_id, db)
-        reinjury_task = run_reinjury_risk(patient_id, session_id, pose_output, db)
-        fall_output, reinjury_output = await asyncio.gather(fall_task, reinjury_task)
+        # Sequential — both share the same db session; concurrent gather would cause
+        # illegal concurrent commits on the same session.
+        fall_output = await run_fall_risk(intake_output, pose_output, patient_id, session_id, db)
+        reinjury_output = await run_reinjury_risk(patient_id, session_id, pose_output, db)
         results["fall_risk"] = fall_output.model_dump()
         results["reinjury_risk"] = reinjury_output.model_dump()
     except Exception as e:
         logger.error("risk agents failed: %s", e)
         failed_agents.extend(["fall_risk", "reinjury_risk"])
         await write_audit("orchestrator", "pipeline_error", patient_id, "risk_agents", db)
+        await db.commit()
         return {"failed_agents": failed_agents, **results}
 
     try:
@@ -63,9 +66,9 @@ async def run_session_pipeline(
         logger.error("reporter agent failed: %s", e)
         failed_agents.append("reporter")
         await write_audit("orchestrator", "pipeline_error", patient_id, "reporter", db)
+        await db.commit()
         return {"failed_agents": failed_agents, **results}
 
-    # Progress agent only if patient has 3+ sessions
     try:
         count_result = await db.execute(
             select(func.count(Session.id)).where(Session.patient_id == patient_id)
@@ -78,6 +81,9 @@ async def run_session_pipeline(
         logger.error("progress agent failed: %s", e)
         failed_agents.append("progress")
         await write_audit("orchestrator", "pipeline_error", patient_id, "progress", db)
+
+    # Single commit for everything accumulated across all agents.
+    await db.commit()
 
     if failed_agents:
         results["failed_agents"] = failed_agents

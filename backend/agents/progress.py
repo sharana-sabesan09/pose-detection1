@@ -130,7 +130,7 @@ Output only valid JSON."""
             )
             db.add(acc)
 
-    await db.commit()
+    await db.flush()
     await write_audit("progress_agent", "generate_progress_report", patient_id, "progress_output", db)
     return output
 
