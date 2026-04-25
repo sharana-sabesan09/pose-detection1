@@ -4,168 +4,192 @@ Analysis based on running `test_agents.py` against two real squat sessions:
 - **message.txt** — 13 reps, session `2026-04-25T16:00:36`, ~38 s
 - **message (1).txt** — 20 reps, session `2026-04-25T16:07:08`, ~40 s
 
-Both sessions produced `overallRating: "poor"`. All reps across both sessions were classified `"poor"` except one `"fair"` rep in each session. This is the actual real-world output the architecture needs to handle.
+Both sessions produced `overallRating: "poor"`. All reps across both sessions were classified `"poor"` except one `"fair"` rep in each session.
 
 ---
 
-## What each agent receives vs. what the data contains
+## Status of identified issues
+
+| Issue | Status | Resolution |
+|-------|--------|------------|
+| Exercise data never reached agents | **Fixed** | `run_exercise_pipeline()` fires as background task after every `POST /sessions/exercise-result` |
+| `exercise_sessions` → `SessionScore` bridge missing | **Fixed** | `exercise_reporter_agent` writes `SessionScore` with fall_risk, reinjury_risk, and rom scores |
+| No rep quality filtering | **Fixed** | Reps with `confidence < 0.7` or `durationMs < 300 ms` excluded before any aggregation |
+| `hipAdductionPeak == 0` sentinel not guarded | **Fixed** | `exclude_zero=True` in `feat_stats()` — landmark-loss sentinels excluded from all hip stats |
+| `swayNorm` and `balance` not reaching fall risk | **Fixed** | `exercise_reporter_agent` derives `fall_risk_score` from swayNorm, pelvicDropPeak, and balance error rate |
+| `consistency` not reaching reinjury risk | **Fixed** | `exercise_reporter_agent` derives `reinjury_risk_score` from consistency, mean error rate, poor-rep rate |
+| `pose_analysis_agent` duplicates mobile work | **Deferred** | Still used for PT frame sessions; only exercise path bypasses it |
+| Agentverse path undocumented entry point | **Deferred** | HTTP pipeline is the active path; Agentverse remains optional |
+
+---
+
+## Current data pipeline (post-fix)
+
+```
+Mobile app                    Backend DB                    Agents
+──────────                    ──────────                    ──────
+ExerciseSessionResult ──▶  exercise_sessions          ──▶  exercise_reporter_agent
+                            rep_analyses                     │  (filters reps, guards sentinels)
+                            Session (linked)                 │  writes Summary + SessionScore
+                                                             │
+                                                             └──▶ progress_agent (if ≥3 sessions)
+
+POST /sessions/start ──▶   sessions
+POST /sessions/frame ──▶   pose_frames          ──▶  pose_analysis_agent
+POST /sessions/end   ──▶   session_scores       ──▶  intake → pose → fall_risk
+                            summaries            ──▶  reinjury_risk → reporter → progress
+```
+
+The two paths now both write to `SessionScore` and `Summary`, so `reinjury_risk_agent` and `progress_agent` see longitudinal data from both exercise and PT sessions.
+
+---
+
+## exercise_reporter_agent (`agents/exercise_reporter.py`)
+
+Replaces the intake → pose_analysis → fall_risk → reinjury_risk → reporter chain for exercise sessions. Takes `ExerciseSessionResult` natively.
+
+### Rep quality filtering
+
+```python
+_MIN_CONFIDENCE = 0.7
+_MIN_DURATION_MS = 300.0   # ms — anatomically impossible squats below this
+
+good_reps = [r for r in all_reps
+             if r.confidence >= _MIN_CONFIDENCE
+             and r.timing.durationMs >= _MIN_DURATION_MS]
+```
+
+Reps 9–12 in `message (1).txt` (51–122 ms, confidence 0.62–0.63) are excluded before any stats are computed.
+
+### `hipAdductionPeak == 0` guard
+
+```python
+def feat_stats(values, exclude_zero=False):
+    clean = [v for v in values if v is not None
+             and (not exclude_zero or v != 0.0)]
+```
+
+`hipAdductionPeak` is computed with `exclude_zero=True`. Reps where the MediaPipe hip landmark was lost contribute no data rather than pulling the mean toward 0°.
+
+### Score derivation
+
+| Score | Formula | Signals used |
+|-------|---------|--------------|
+| `rom_score` | `romRatio_mean × 100` (clamped 0–100) | Per-rep normalised depth |
+| `fall_risk_score` | sway_component (40) + pelvic_component (30) + balance_component (30) | `swayNorm`, `pelvicDropPeak`, `balance` error rate |
+| `reinjury_risk_score` | consistency_component (50) + error_component (30) + poor_component (20) | `consistency`, mean error rate across all types, poor-rep rate |
+
+**Fall risk components:**
+- `sway_component = min(1, swayNorm_mean / 0.05) × 40` — clinically, sway > 0.05 is significant
+- `pelvic_component = min(1, pelvicDropPeak_mean / 20°) × 30` — clinically, > 10° is significant
+- `balance_component = balance_error_rate × 30`
+
+**Reinjury risk components:**
+- `consistency_component = (1 − consistency) × 50` — low consistency = compensatory variance = elevated risk
+- `error_component = mean_error_rate × 30`
+- `poor_component = poor_rep_rate × 20`
+
+### RAG query
+
+Keyed on the dominant errors (those > 50% of good reps) so clinical guidelines retrieved are specific to the exercise and error pattern, e.g. `"squat exercise rehabilitation kneeValgus trunkFlex"`.
+
+### DB writes
+
+- `Summary(agent_name="reporter")` — progress_agent picks up these rows via its existing query (`WHERE agent_name = "reporter"`)
+- `SessionScore` — fall_risk_score, reinjury_risk_score, rom_score — makes the session visible to `reinjury_risk_agent`'s trend query
+
+---
+
+## What the original agents receive vs. what the data contains
+
+> The sections below describe the **PT frame pipeline** (`POST /sessions/end`), not the exercise pipeline. The exercise pipeline bypasses all of these agents.
 
 ### `intake_agent`
 
 **Receives:** `pt_plan` (string), `pain_scores` (dict), `user_input` (string)
 
-**Problem:** None of these exist in the exercise session schema. To feed the agent at all, `test_agents.py` derives `pain_scores` from error-flag frequencies (e.g., 100% `kneeValgus` rate → `knee_medial: 7.0`). This is a fabrication — it inverts a biomechanical observation into a subjective pain report.
+**Problem (unchanged):** None of these exist in the exercise session schema. `test_agents.py` derived `pain_scores` from error-flag frequencies — a fabrication. The agent is purpose-built for clinician-administered PT intake forms.
 
-The agent normalises these synthetic scores, extracts `target_joints`, and sets `session_goals`. The goals it will generate (`"Reduce knee valgus"`, `"Improve trunk stability"`) are correct in spirit, but they are downstream of a lossy, invented input. A real patient might squat with consistent valgus and no knee pain at all — or the opposite.
-
-**What would be better:** The intake agent is purpose-built for a clinician-administered PT intake form. For exercise sessions, either (a) skip it entirely and derive joint targets directly from error-flag frequencies, or (b) build a separate `exercise_intake_agent` that takes `ExerciseSessionResult` natively.
+**Status:** Not used in the exercise pipeline.
 
 ---
 
 ### `pose_analysis_agent`
 
-**Receives:** Raw `PoseFrame` rows with `angles_json` — expects keys like `hip_flexion`, `knee_flexion`, `lumbar_flexion`, `ankle_dorsiflexion`, etc.
+**Receives:** Raw `PoseFrame` rows with `angles_json`
 
-**Problem:** The mobile app does not store raw frames. `test_agents.py` synthesises frames by mapping `kneeFlexionDeg` → `knee_flexion`, `trunkFlexPeak` → `lumbar_flexion`, and approximating `hip_flexion` as `180 - kneeFlexionDeg`. Every other feature is silently dropped:
+**Problem (unchanged):** Mobile app does not store raw frames via the exercise path. The 12 biomechanical features per rep computed by the mobile app are richer than what this agent re-derives from three synthetic joints.
 
-| Feature in session data | Fate in pose_analysis |
-|-------------------------|-----------------------|
-| `fppaPeak` / `fppaAtDepth` | **Dropped** — no slot in `angles_json` |
-| `pelvicDropPeak` | **Dropped** — no matching joint in `_EXPECTED_ROM` |
-| `pelvicShiftPeak` | **Dropped** |
-| `hipAdductionPeak` | **Dropped** — 0 on several reps (landmark lost) |
-| `kneeOffsetPeak` | **Dropped** |
-| `swayNorm` | **Dropped** — the single best fall-risk proxy in the data |
-| `smoothness` | **Dropped** |
-| `romRatio` | **Dropped** — the normalised depth already computed by the app |
-| `confidence` | **Dropped** — all reps treated equally |
-
-The agent's `_EXPECTED_ROM` lookup table (`knee_flexion: 135`, etc.) will flag joints where ROM across all reps is < 40% of the expected value. In message.txt, `kneeFlexionDeg` ranges from **48.9° to 173.3°** across 13 reps — enormous variance that the ROM aggregation will flatten into a mean. No flagging will occur because the mean sits near the expected range even though individual reps are wildly inconsistent.
-
-**Specific data problem — zero `hipAdductionPeak`:** Reps in both sessions show `hipAdductionPeak: 0` (5 reps in message.txt, 7 in message (1).txt). This means the hip landmark was lost during capture, not that the hip is at 0°. If this value ever reached `angles_json`, the agent would treat it as a real measurement and skew joint stats down significantly.
-
-**Specific data problem — noise reps:** In message (1).txt, reps 9–12 have durations of 51–122 ms. A human squat takes at minimum 800–1000 ms. These are likely noise triggers from the rep-detection algorithm. The agent has no mechanism to weight or discard low-confidence or implausibly short reps.
+**Status:** Still used for the PT frame path (`POST /sessions/frame` + `POST /sessions/end`). Not used in the exercise pipeline.
 
 ---
 
 ### `fall_risk_agent`
 
-**Receives:** `IntakeOutput` (target joints, pain scores, goals) + `PoseAnalysisOutput` (ROM score, flagged joints, joint stats)
+**Problem (unchanged for PT path):** Receives synthesised pain scores and a three-joint ROM approximation. `swayNorm`, `balance`, and `pelvicDropPeak` never reach it via the PT path.
 
-**Problem:** This agent has access to the weakest possible signals for fall risk. The exercise data contains three direct fall-risk indicators that never reach the agent:
-
-| Signal | Actual values | Reaches fall_risk_agent? |
-|--------|---------------|--------------------------|
-| `swayNorm` | 0.001–0.048 across both sessions | **No** |
-| `balance` error flag | False for all reps in both sessions | **No** |
-| `pelvicDropPeak` | 1.7°–23.9° (>10° is clinically significant) | **No** |
-
-The agent instead uses the RAG-augmented clinical guidelines query built from `flagged_joints` and `pain_scores`. Since `pain_scores` is fabricated and `flagged_joints` is derived from a lossy three-joint frame approximation, the RAG query is also inaccurate.
-
-Ironically, `swayNorm` values in these two sessions (0.001–0.048) suggest very low sway — the subject has good balance despite consistent biomechanical errors. The agent cannot distinguish this from a high-sway patient because the signal is never delivered to it.
+**Status:** PT path only. Exercise path uses `exercise_reporter_agent` which incorporates all three signals.
 
 ---
 
 ### `reinjury_risk_agent`
 
-**Receives:** `PoseAnalysisOutput` (current session) + historical `SessionScore` rows for the patient
+**Problem (unchanged for PT path):** Reads `SessionScore` rows — now populated by both pipelines. For exercise-only patients, the trend query will return data after the first exercise session runs through `exercise_reporter_agent`.
 
-**Problem — empty history:** `SessionScore` is only populated by the PT pipeline (`POST /sessions/{id}/end`). The exercise pipeline (`POST /sessions/exercise-result`) never writes to `SessionScore`. So for a patient who only does exercise sessions, the reinjury agent will always have an empty trend: `fall_trend=[]`, `rom_trend=[]`. The prompt to the LLM will say `Fall risk trending up: False, ROM trending down: False` because there are no values to compare — which it will misread as stability rather than absence of data.
-
-**Problem — consistency not visible:** The `consistency` field in the session summary (`0.668` for message.txt, `0.623` for message (1).txt) is a direct intra-session variance metric that directly informs reinjury risk (high variance = compensatory patterns = elevated reinjury risk). The agent never sees it.
-
-**Problem — `SessionScore` and `ExerciseSession` are disconnected:** There is currently no mechanism to write exercise session outcomes (classification counts, avg confidence, consistency) into `SessionScore`, so reinjury trend tracking cannot accumulate across exercise sessions.
+**Status:** PT path only, but now benefits from exercise-session `SessionScore` rows written by the exercise pipeline.
 
 ---
 
 ### `reporter_agent`
 
-**Receives:** All prior agent outputs — the synthesised, lossy, approximated chain
+**Problem (unchanged for PT path):** Receives the synthesised chain — lossy but functionally acceptable for PT sessions where the raw data genuinely comes from structured intake forms.
 
-**Problem:** The report will be clinically coherent but factually incomplete. The reporter will cite ROM score and flagged joints derived from three synthetic joints, fall risk derived from fabricated pain scores, and reinjury risk with no longitudinal basis. It will not mention:
-
-- `kneeValgus` present on **100% of reps** across both sessions (the single most consistent finding)
-- `trunkFlex` present on ≥85% of reps in both sessions
-- The bimodal depth distribution (some reps at 50–70°, others at 150–180°) — high variance masked by averaging
-- Per-side differences (left vs. right error profiles differ per rep)
-- Reps with low confidence being indistinguishable from high-confidence reps in the summary
-
-**What would be better:** Feed `ExerciseSessionResult` directly to the reporter as a structured context block, alongside (or instead of) the synthesised agent chain. The structured features carry far more clinical signal than anything derivable from the current pipeline.
+**Status:** PT path only.
 
 ---
 
 ### `progress_agent`
 
-**Receives:** All `Summary` rows with `agent_name="reporter"` for a patient, plus `AccumulatedScore`
+**Receives:** All `Summary` rows with `agent_name="reporter"` for a patient.
 
-**Problem:** Progress is tracked in natural language summaries. If the reporter does not mention that `kneeValgus` occurred on 100% of reps (because that signal never reached it), the progress agent cannot track whether valgus is improving over time. The agent is fully dependent on the quality of the reporter's text.
-
-The `AccumulatedScore` weighted average uses `fall_risk_score` and `reinjury_risk_score` from `SessionScore`, which as noted above is never populated by exercise sessions. So for exercise-only patients, `accumulated_scores` will always be `NULL`.
+**Improvement:** Exercise session summaries written by `exercise_reporter_agent` use `agent_name="reporter"`, so `progress_agent` now sees longitudinal summaries from both PT and exercise sessions in its query.
 
 ---
 
-## Structural findings
+## Remaining structural issues
 
-### 1. Two data pipelines that do not communicate
+### 1. `pose_analysis_agent` still duplicates mobile work (for PT path)
 
-```
-Mobile app                 Backend DB                  Agents
-──────────                 ──────────                  ──────
-ExerciseSessionResult ──▶  exercise_sessions           (never read)
-                           rep_analyses                (never read)
+The agent re-derives ROM from raw frames; the mobile app computes 12 features per rep. No fix applied — the PT frame path is the only consumer of `pose_analysis_agent`, and changing it would require restructuring the PT intake flow.
 
-POST /sessions/start ──▶   sessions
-POST /sessions/frame ──▶   pose_frames          ──▶   pose_analysis_agent
-POST /sessions/end   ──▶   session_scores       ──▶   fall_risk_agent
-                           summaries            ──▶   reinjury_risk_agent
-                                                ──▶   reporter_agent
-                                                ──▶   progress_agent
-```
+### 2. Agentverse path is architecturally orphaned
 
-The exercise session data (the actual mobile output) is persisted but never read by any agent. The agents read from `pose_frames` which in practice are only populated if the mobile app calls `POST /sessions/frame` — a path that appears unused given the real data.
+No documented external entry point routes exercise results into the uAgent pipeline. The HTTP pipeline is the active path in production. The Agentverse path is available for future external orchestration via Fetch.ai.
 
-### 2. `pose_analysis_agent` duplicates work the app does better
+### 3. ChromaDB is ephemeral on Railway
 
-The mobile app runs MediaPipe + custom squat analysis on-device, producing 12 biomechanical features per rep with confidence scores. The `pose_analysis_agent` re-derives a single `rom_score` from raw angle frames using a lookup table with fixed expected ROM values. The agent's output is strictly worse than what the app already produced:
-
-| Metric | Mobile app | pose_analysis_agent |
-|--------|-----------|---------------------|
-| Knee valgus | Detected per rep with confidence | Not detected |
-| Depth metric | `romRatio` (normalised to 120°) | ROM range from raw frames |
-| Balance | `swayNorm` per rep | Not computed |
-| FPPA | Per rep | Not computed |
-| Trunk lean | Per rep | Approximated via `lumbar_flexion` |
-
-### 3. The Fetch.ai Agentverse path is architecturally orphaned
-
-There are currently **three** data entry points:
-
-- `POST /sessions/exercise-result` → DB only, no agents
-- `POST /sessions/end` → HTTP agent pipeline (direct function calls)
-- Agentverse mailbox → uAgent pipeline (typed message-passing)
-
-Paths 2 and 3 run the same logical pipeline with different transport mechanisms. Path 1 is disconnected from both. No documented mechanism routes exercise results into either agent path.
-
-### 4. Confidence is not propagated
-
-Rep-level confidence (0.55–0.96 in the real data) is stored in `rep_analyses.confidence` but never used by any agent. Rep 4 in message.txt has `confidence: 0.55` — below most acceptable thresholds — yet it contributes equally to all aggregations. In message (1).txt, reps 11 and 12 have confidence 0.62 and 0.63 combined with durations of 58 ms and 51 ms, which is anatomically impossible. These should be filtered before any agent processes them.
-
-### 5. `hipAdductionPeak = 0` is a data quality sentinel, not a measurement
-
-Both sessions contain reps with `hipAdductionPeak: 0.0`. This value is a landmark-loss sentinel emitted by the mobile SDK when MediaPipe cannot localise the hip joint. Treating it as 0° of hip adduction would catastrophically skew any hip-related analysis. The backend stores it faithfully but has no validation layer to detect or exclude these.
+No clinical PDFs have been ingested into ChromaDB. The RAG context in all agents will be empty (`"No relevant context found"`) until PDFs are added to `rag/loader.py`'s source directory and the service is restarted. This does not break the pipeline — agents degrade gracefully to LLM-only analysis.
 
 ---
 
-## What should change
+## Railway services
+
+| Service | Type | Internal hostname | Public URL |
+|---------|------|-------------------|------------|
+| `sentinel-backend` | FastAPI + uAgents | `sentinel-backend.railway.internal` | `https://sentinel-backend-production-e75a.up.railway.app` |
+| `Postgres` | PostgreSQL 16 | `postgres.railway.internal:5432` | `shuttle.proxy.rlwy.net:41437` |
+
+Services communicate over Railway's private network. `sentinel-backend` connects to Postgres via `DATABASE_URL=postgresql://postgres:...@postgres.railway.internal:5432/railway` (rewritten to `postgresql+asyncpg://` by the `fix_db_scheme` validator in `config.py`).
+
+The `releaseCommand = "uv run alembic upgrade head"` in `railway.toml` runs Alembic migrations before each deploy is promoted to live traffic. All three migrations (0001 initial, 0002 exercise sessions, 0003 linked session) applied successfully on first deploy.
+
+---
+
+## What still needs doing
 
 | Priority | Change | Rationale |
 |----------|--------|-----------|
-| High | Add an `exercise_reporter_agent` that takes `ExerciseSessionResult` directly | Bypasses the lossy translation chain entirely |
-| High | Write `exercise_sessions` → `SessionScore` bridge | Enables reinjury trend tracking for exercise-only patients |
-| High | Filter reps with `confidence < 0.7` and `durationMs < 300` before agent processing | Eliminates noise reps from message (1).txt reps 9–12 |
-| High | Add a `hipAdductionPeak == 0` guard in any agent or aggregation that uses that field | Prevents landmark-loss sentinels from polluting analysis |
-| Medium | Pass `swayNorm` and `balance` flag to `fall_risk_agent` | These are the best balance signals in the data |
-| Medium | Pass `consistency` to `reinjury_risk_agent` | High intra-session variance → elevated reinjury risk |
-| Medium | Route exercise session data into the agent pipeline OR deprecate the PT frame-ingestion path | The dual-pipeline split will diverge further over time |
-| Low | Retire `pose_analysis_agent` or reduce it to a fallback for raw-frame sessions only | The mobile app produces strictly richer analysis |
-| Low | Document the Agentverse path entry point | Currently unreachable from any external caller |
+| Medium | Ingest clinical PDFs into ChromaDB | RAG context currently always empty; agents degrade to LLM-only |
+| Medium | Retire `pose_analysis_agent` or reduce to PT-frame fallback | Mobile computes richer analysis; PT path is the only consumer |
+| Low | Document Agentverse path entry point | Currently unreachable from any external caller |
+| Low | Add per-rep side-aware analysis to `exercise_reporter_agent` | Left/right error profiles differ per rep; currently averaged |
