@@ -986,8 +986,9 @@ const styles = StyleSheet.create({
   bottomStack: {
     marginTop: 'auto',
     paddingHorizontal: 14,
-    paddingBottom: Platform.OS === 'ios' ? 18 : 16,
-    gap: 12,
+    // Lift buttons clear of the home indicator / nav bar.
+    paddingBottom: Platform.OS === 'ios' ? 36 : 28,
+    gap: 10,
   },
   scoreCard: {
     paddingHorizontal: 16,
@@ -1068,26 +1069,26 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     flex: 1,
-    minHeight: 50,
-    borderRadius: 14,
+    minHeight: 42,
+    borderRadius: 12,
     backgroundColor: COLORS.ink,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
   },
   primaryButtonDanger: {
     backgroundColor: COLORS.bad,
   },
   primaryButtonText: {
     fontFamily: FONTS.handBold,
-    fontSize: 16,
+    fontSize: 14,
     color: COLORS.paper,
   },
   secondaryButton: {
-    minHeight: 50,
-    minWidth: 78,
-    borderRadius: 14,
-    paddingHorizontal: 16,
+    minHeight: 42,
+    minWidth: 68,
+    borderRadius: 12,
+    paddingHorizontal: 14,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(243,236,219,0.92)',
@@ -1096,7 +1097,7 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     fontFamily: FONTS.handBold,
-    fontSize: 16,
+    fontSize: 14,
     color: COLORS.ink,
   },
   modeRow: {

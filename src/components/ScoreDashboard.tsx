@@ -86,33 +86,12 @@ export default function ScoreDashboard({ scores, mode, initialized }: Props) {
         large
       />
 
-      {/* ── FOUR SECONDARY SCORES — two rows of two ────────────────────────── */}
+      {/* ── BALANCE STABILITY (the only secondary score we surface live) ──── */}
       <View style={styles.row}>
         <ScoreBox
           label="Balance Stability"
           value={scores.balanceStability}
           active={activeKeys.includes('balanceStability')}
-          initialized={initialized}
-        />
-        <ScoreBox
-          label="Transition Safety"
-          value={scores.transitionSafety}
-          active={activeKeys.includes('transitionSafety')}
-          initialized={initialized}
-        />
-      </View>
-
-      <View style={styles.row}>
-        <ScoreBox
-          label="Gait Regularity"
-          value={scores.gaitRegularity}
-          active={activeKeys.includes('gaitRegularity')}
-          initialized={initialized}
-        />
-        <ScoreBox
-          label="Lateral Sway"
-          value={scores.lateralSway}
-          active={activeKeys.includes('lateralSway')}
           initialized={initialized}
         />
       </View>
