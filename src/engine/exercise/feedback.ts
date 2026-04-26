@@ -1,3 +1,5 @@
+import type { RepErrors } from './types';
+
 /**
  * src/engine/exercise/feedback.ts — PATIENT-FACING FEEDBACK CUES
  *
@@ -106,7 +108,7 @@ export const LSDT_FEEDBACK: Record<string, ErrorFeedback> = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function getRepFeedback(
-  errors:       { [key: string]: boolean | undefined },
+  errors:       RepErrors,
   exerciseType: 'sls' | 'lsdt' = 'sls',
 ): ErrorFeedback[] {
   const map = exerciseType === 'lsdt' ? LSDT_FEEDBACK : SLS_FEEDBACK;
@@ -121,7 +123,7 @@ export function getRepFeedback(
  * Prioritises the most clinically significant fault.
  */
 export function getSummaryMessage(
-  errors:         { [key: string]: boolean | undefined },
+  errors:         RepErrors,
   classification: string,
   exerciseType:   'sls' | 'lsdt' = 'sls',
 ): string {

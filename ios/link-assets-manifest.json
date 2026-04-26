@@ -1,0 +1,25 @@
+{
+  "migIndex": 1,
+  "data": [
+    {
+      "path": "assets/fonts/Caveat.ttf",
+      "sha1": "7eebc2bf2bbfbd51b0dba7eaee8fd8f7b51a382a"
+    },
+    {
+      "path": "assets/fonts/JetBrainsMono.ttf",
+      "sha1": "bef242b36d905170007caed53cd6a07775dbfb82"
+    },
+    {
+      "path": "assets/fonts/Kalam-Bold.ttf",
+      "sha1": "5b1ca2a94b44d57d1852e50090f84579332dcd49"
+    },
+    {
+      "path": "assets/fonts/Kalam-Regular.ttf",
+      "sha1": "bf663d1f57c2312e12c9987ef33e5e39ad15e67c"
+    },
+    {
+      "path": "assets/fonts/PatrickHand-Regular.ttf",
+      "sha1": "0a3c5153b2778efd30529b9a5ad6a2135567d0d4"
+    }
+  ]
+}

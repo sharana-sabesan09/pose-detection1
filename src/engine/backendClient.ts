@@ -139,3 +139,21 @@ export async function fetchProgressReport(patientId: string) {
     next_goals: string[];
   }>(`/reports/${patientId}/progress`, 'GET');
 }
+
+/** ElevenLabs TTS via backend; returns base64 MP3 for WebView HTML5 Audio. */
+export async function fetchTtsSpeak(text: string, timeoutMs = 30000): Promise<string | null> {
+  const t = text.trim();
+  if (!t) return null;
+  try {
+    const data = await backendRequest<{ audio_b64: string }>(
+      '/tts/speak',
+      'POST',
+      { text: t },
+      timeoutMs,
+    );
+    return data?.audio_b64 ?? null;
+  } catch (e) {
+    console.warn('[fetchTtsSpeak]', (e as Error).message);
+    return null;
+  }
+}

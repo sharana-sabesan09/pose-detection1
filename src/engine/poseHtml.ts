@@ -21,8 +21,18 @@ export const POSE_HTML = `
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; }
-    video  { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
-    canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+    video  {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+      transform-origin: center;
+    }
+    canvas {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none;
+      transform: scaleX(-1);
+      transform-origin: center;
+    }
     #msg   { position: absolute; top: 12px; left: 12px; color: #fff; font: 12px monospace;
              background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; }
   </style>
@@ -32,6 +42,27 @@ export const POSE_HTML = `
   <canvas id="c"></canvas>
   <div id="msg">Loading MediaPipe…</div>
 
+  <script>
+    (function () {
+      var lastAudio = null;
+      window.playAudio = function (b64) {
+        if (!b64 || typeof b64 !== 'string') return;
+        try {
+          if (lastAudio) {
+            try { lastAudio.pause(); } catch (e) {}
+            lastAudio.removeAttribute('src');
+            lastAudio.load();
+          }
+          var a = new Audio('data:audio/mpeg;base64,' + b64);
+          a.setAttribute('playsinline', '');
+          a.playsInline = true;
+          lastAudio = a;
+          var p = a.play();
+          if (p && typeof p.catch === 'function') p.catch(function () {});
+        } catch (e) {}
+      };
+    })();
+  </script>
   <script type="module">
     import { PoseLandmarker, FilesetResolver, DrawingUtils }
       from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm';
@@ -58,10 +89,12 @@ export const POSE_HTML = `
     });
 
     msg.textContent = 'Starting camera…';
+    const draw = new DrawingUtils(ctx);
+    let lastTs = -1;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
         audio: false
       });
       video.srcObject = stream;
@@ -71,9 +104,6 @@ export const POSE_HTML = `
     } catch (e) {
       msg.textContent = 'Camera error: ' + e.message;
     }
-
-    const draw = new DrawingUtils(ctx);
-    let lastTs = -1;
 
     // ── Reference ghost skeleton (single-leg squat cycle) ──────────────────
     const _C = (x, y, v = 0.0) => ({ x, y, v });

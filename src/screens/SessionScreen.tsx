@@ -44,8 +44,11 @@ import {
 import { ExercisePipeline } from '../engine/exercise/pipeline';
 import {
   ExerciseType,
+  RepErrors,
   SessionExerciseEntry,
 } from '../engine/exercise/types';
+import { computeLiveErrors, fetchTTSAudio } from '../engine/exercise/liveFeedback';
+import { getSummaryMessage } from '../engine/exercise/feedback';
 import {
   buildExportPayload,
   buildSessionExerciseEntry,
@@ -103,6 +106,19 @@ function modeForExercise(e: ExerciseType): SessionMode {
   return e === 'walking' ? 'walking' : 'standing';
 }
 
+/** Maps prescribed exercise to SLS vs LSDT feedback tables. */
+function feedbackExerciseType(ex: ExerciseType): 'sls' | 'lsdt' {
+  return ex === 'leftLsd' || ex === 'rightLsd' ? 'lsdt' : 'sls';
+}
+
+/** Coarse live quality label from how many error flags fired in the window. */
+function liveErrorsToClassification(errors: RepErrors): string {
+  const n = Object.values(errors).filter(Boolean).length;
+  if (n <= 1) return 'good';
+  if (n <= 3) return 'fair';
+  return 'poor';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -134,6 +150,7 @@ export default function SessionScreen() {
   const detectorsRef    = useRef(new PoseDetectors());
   const sessionStateRef = useRef(sessionState);
   const webViewRef      = useRef<WebView>(null);
+  const ttsRecordingEpochRef = useRef(0);
 
   useEffect(() => { sessionStateRef.current = sessionState; }, [sessionState]);
 
@@ -191,6 +208,44 @@ export default function SessionScreen() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionState, exerciseIdx]);
+
+  // ── Live coaching TTS: every 10s while recording (SLS / LSDT only) ─────────
+  useEffect(() => {
+    if (sessionState !== 'recording') return;
+    if (!currentExercise || currentExercise === 'walking') return;
+
+    ttsRecordingEpochRef.current += 1;
+    const epoch = ttsRecordingEpochRef.current;
+    const exType = feedbackExerciseType(currentExercise);
+
+    const runTick = async () => {
+      if (sessionStateRef.current !== 'recording') return;
+      if (ttsRecordingEpochRef.current !== epoch) return;
+      const pipe = pipelineRef.current;
+      if (!pipe) return;
+      const buf = pipe.getFrameBuffer();
+      if (buf.length === 0) return;
+
+      const errors = computeLiveErrors(buf);
+      const classification = liveErrorsToClassification(errors);
+      const text = getSummaryMessage(errors, classification, exType);
+      const b64 = await fetchTTSAudio(text);
+      if (sessionStateRef.current !== 'recording') return;
+      if (ttsRecordingEpochRef.current !== epoch) return;
+      if (!b64) return;
+      const wv = webViewRef.current;
+      if (!wv) return;
+      wv.injectJavaScript(
+        `(function(){try{if(typeof window.playAudio==='function')window.playAudio(${JSON.stringify(b64)});}catch(e){}})();true;`,
+      );
+    };
+
+    const id = setInterval(runTick, 10000);
+    return () => {
+      clearInterval(id);
+      ttsRecordingEpochRef.current += 1;
+    };
+  }, [sessionState, currentExercise]);
 
   // ── Receive landmarks from MediaPipe WebView ──────────────────────────────
   const onMessage = useCallback((event: WebViewMessageEvent) => {
