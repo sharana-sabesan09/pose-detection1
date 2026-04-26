@@ -254,14 +254,22 @@ function BackendSessionCard({
 }: {
   session: PatientOverview['recent_sessions'][number];
 }) {
+  const isExerciseVisit = session.kind === 'exercise';
+  const titleText = isExerciseVisit
+    ? (session.exercises.length > 0 ? session.exercises.join(' · ') : 'Exercise visit')
+    : 'PT session';
+  const exerciseCountChip = isExerciseVisit && session.num_exercises > 0
+    ? `${session.num_exercises} exercise${session.num_exercises === 1 ? '' : 's'}`
+    : null;
   return (
     <View style={styles.card}>
       <View style={styles.rowBetween}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.cardTitle}>
-            {session.kind === 'exercise' ? (session.exercise ?? 'Exercise session') : 'PT session'}
+          <Text style={styles.cardTitle}>{titleText}</Text>
+          <Text style={styles.helperText}>
+            {formatBackendDate(session.started_at)}
+            {exerciseCountChip ? ` • ${exerciseCountChip}` : ''}
           </Text>
-          <Text style={styles.helperText}>{formatBackendDate(session.started_at)}</Text>
         </View>
         <View style={styles.kindBadge}>
           <Text style={styles.kindBadgeText}>{session.kind.toUpperCase()}</Text>

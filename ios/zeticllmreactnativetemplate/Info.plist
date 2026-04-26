@@ -38,7 +38,7 @@
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>SENTINEL uses speech recognition to transcribe what you say into the symptoms field.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
+	<string/>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

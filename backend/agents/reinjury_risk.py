@@ -1,3 +1,10 @@
+"""reinjury_risk.py — per-session reinjury risk assessment.
+
+Note: Exercise rows now carry ``visit_id`` linking the N exercises from
+one recording visit. This agent currently scans the last 5 Exercise
+rows (by created_at) — visit-level grouping is reserved for the future
+longitudinal report agent.
+"""
 import json
 import logging
 import statistics
@@ -11,7 +18,7 @@ from uagents import Agent, Context
 from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.hipaa import hipaa_wrap
 from agents.messages import ReinjuryRiskRequest, ReinjuryRiskResponse
-from db.models import AgentArtifact, ExerciseSession, Patient, RepAnalysis, Session, SessionScore
+from db.models import AgentArtifact, Exercise, Patient, RepAnalysis, Session, SessionScore
 from schemas.session import PoseAnalysisOutput, ReinjuryRiskOutput
 from utils.artifacts import get_artifact_id, write_artifact
 from utils.audit import write_audit
@@ -128,17 +135,19 @@ async def run_reinjury_risk(
     # ── Query 2: RepAnalysis rows for exercise sessions ────────────────────────
     rep_feature_context: dict[str, dict] = {}
     if injured_joints:
+        # NOTE: visit_id is available on Exercise rows for future use — switching to
+        # .distinct(Exercise.visit_id) would give 5 visits instead of 5 exercises.
         ex_sessions_result = await db.execute(
-            select(ExerciseSession)
-            .where(ExerciseSession.patient_id == patient_id)
-            .order_by(ExerciseSession.created_at.desc())
+            select(Exercise)
+            .where(Exercise.patient_id == patient_id)
+            .order_by(Exercise.created_at.desc())
             .limit(5)
         )
         ex_sessions = ex_sessions_result.scalars().all()
 
         for ex_session in ex_sessions:
             reps_result = await db.execute(
-                select(RepAnalysis).where(RepAnalysis.exercise_session_id == ex_session.id)
+                select(RepAnalysis).where(RepAnalysis.exercise_id == ex_session.id)
             )
             reps = reps_result.scalars().all()
             if not reps:

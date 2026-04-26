@@ -67,8 +67,28 @@ class ExerciseSummary(BaseModel):
     summary: ExerciseSummaryStats
 
 
-class ExerciseSessionResult(BaseModel):
+class InjuredJointRom(BaseModel):
+    joint: str                  # mediapipe-style joint name, e.g. "right_knee"
+    rom: Optional[float] = None  # null = exercise ran but no reps detected
+
+
+class ExerciseResult(BaseModel):
+    """Per-exercise upload body for POST /sessions/exercise-result.
+
+    ``sessionId`` is the legacy field name kept for backward compatibility
+    with older mobile builds — it carries the synthetic per-exercise id
+    (e.g. ``<visitId>-<exercise>-<i>``). ``visitId`` is the top-level
+    MultiExerciseSession.sessionId shared across the visit's exercises.
+    """
+
     sessionId: str
+    # Top-level MultiExerciseSession.sessionId — shared across all exercises
+    # from one visit. Optional so older mobile builds continue to work; we
+    # default it to ``sessionId`` server-side when absent.
+    visitId: Optional[str] = None
+    # Per-exercise ROM for the patient's injured joint on this visit, copied
+    # from MultiExerciseSession.patient.injuredJoint.romByExercise[exercise].
+    injuredJointRom: Optional[InjuredJointRom] = None
     startedAtMs: float
     endedAtMs: float
     durationMs: float
@@ -83,35 +103,35 @@ class ExerciseSessionResult(BaseModel):
     frameFeaturesCsv: Optional[str] = None
     framesCsv: Optional[str] = None
     sessionMetadata: Optional[SessionMetadata] = None
-    # Optional calibration markers (fixed 4-step protocol on mobile).
-    calibrationBatchId: Optional[str] = None
-    calibrationStep: Optional[int] = None
-
-    @model_validator(mode="after")
-    def _validate_calibration(self) -> Self:
-        has_batch = self.calibrationBatchId is not None
-        has_step = self.calibrationStep is not None
-        if has_batch ^ has_step:
-            raise ValueError("calibrationBatchId and calibrationStep must be provided together")
-        if has_step:
-            if not (1 <= int(self.calibrationStep) <= 4):  # type: ignore[arg-type]
-                raise ValueError("calibrationStep must be between 1 and 4")
-        if has_batch:
-            b = (self.calibrationBatchId or "").strip()
-            if not b:
-                raise ValueError("calibrationBatchId must be non-empty")
-            self.calibrationBatchId = b
-        return self
 
 
-class ExerciseSessionResponse(BaseModel):
+class ExerciseResponse(BaseModel):
     id: str
     sessionId: str
+    visitId: str
     exercise: str
     numReps: int
     overallRating: str
     # UUID of the companion Session row — pass to POST /sessions/{id}/frame
     # and POST /exports/session so raw frames land in the DB for the agents.
     linkedSessionId: str
-    calibrationBatchId: Optional[str] = None
-    calibrationStep: Optional[int] = None
+
+
+# Backward-compat aliases — older imports continue to work during the rename.
+ExerciseSessionResult = ExerciseResult
+ExerciseSessionResponse = ExerciseResponse
+
+
+class MultiExerciseArchivePayload(BaseModel):
+    """Full MultiExerciseSession JSON for POST /sessions/multi-exercise-archive.
+
+    Stored verbatim for future longitudinal agents. The current ingest
+    path does NOT read this back — write-only for now.
+    """
+
+    visitId: str
+    startedAtMs: float
+    endedAtMs: float
+    durationMs: float
+    patientId: Optional[str] = None
+    payload: dict   # full MultiExerciseSession verbatim

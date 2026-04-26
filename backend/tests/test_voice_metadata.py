@@ -12,9 +12,9 @@ os.environ.setdefault("JWT_SECRET", "test-secret")
 os.environ.setdefault("CHROMA_PERSIST_DIR", "./chroma_db")
 os.environ.setdefault("DEV_MODE", "True")
 
-from db.models import Base, ExerciseSession
-from routers.sessions import store_exercise_result
-from schemas.exercise import ExerciseSessionResult
+from db.models import Base, Exercise, MultiExerciseSessionArchive
+from routers.sessions import store_exercise_result, store_multi_exercise_archive
+from schemas.exercise import ExerciseResult, MultiExerciseArchivePayload
 from schemas.voice import VoiceMetadataExtractRequest
 from utils.voice_metadata import build_session_metadata_from_voice
 
@@ -63,9 +63,11 @@ class VoiceMetadataTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(normalized.startswith("Right hip pain"))
 
-        body = ExerciseSessionResult.model_validate(
+        body = ExerciseResult.model_validate(
             {
                 "sessionId": "voice-metadata-test-session",
+                "visitId": "visit-voice-metadata-test",
+                "injuredJointRom": {"joint": "right_knee", "rom": 0.75},
                 "startedAtMs": 1000,
                 "endedAtMs": 2000,
                 "durationMs": 1000,
@@ -139,17 +141,74 @@ class VoiceMetadataTests(unittest.IsolatedAsyncioTestCase):
 
             stored = (
                 await db.execute(
-                    select(ExerciseSession).where(
-                        ExerciseSession.mobile_session_id == "voice-metadata-test-session"
+                    select(Exercise).where(
+                        Exercise.mobile_exercise_id == "voice-metadata-test-session"
                     )
                 )
             ).scalars().one()
 
         self.assertEqual(response.sessionId, "voice-metadata-test-session")
+        self.assertEqual(response.visitId, "visit-voice-metadata-test")
+        self.assertEqual(stored.visit_id, "visit-voice-metadata-test")
+        self.assertEqual(stored.injured_joint_rom, {"joint": "right_knee", "rom": 0.75})
         self.assertIsNotNone(stored.metadata_json)
         self.assertEqual(stored.metadata_json["voice"]["derived"]["painScore"], 4.0)
         self.assertEqual(stored.metadata_json["voice"]["derived"]["painLocations"], ["hip"])
         self.assertEqual(stored.metadata_json["voice"]["derived"]["sessionGoals"], ["strength"])
+
+    async def test_multi_exercise_archive_idempotent(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        body = MultiExerciseArchivePayload(
+            visitId="visit-archive-test",
+            startedAtMs=1000.0,
+            endedAtMs=2000.0,
+            durationMs=1000.0,
+            patientId=None,
+            payload={
+                "sessionId": "visit-archive-test",
+                "patient": {"patientId": None, "injuredJoint": {"name": "right_knee", "romByExercise": {}}},
+                "exercises": [],
+            },
+        )
+
+        async with session_factory() as db:
+            first = await store_multi_exercise_archive(
+                body, db=db, _user={"user_id": "test", "role": "admin"}
+            )
+            self.assertEqual(first, {"status": "stored", "visitId": "visit-archive-test"})
+
+            archived = (
+                await db.execute(
+                    select(MultiExerciseSessionArchive).where(
+                        MultiExerciseSessionArchive.visit_id == "visit-archive-test"
+                    )
+                )
+            ).scalars().one()
+            self.assertEqual(archived.visit_id, "visit-archive-test")
+            self.assertEqual(archived.payload_json["sessionId"], "visit-archive-test")
+
+            second = await store_multi_exercise_archive(
+                body, db=db, _user={"user_id": "test", "role": "admin"}
+            )
+            self.assertEqual(second, {"status": "exists", "visitId": "visit-archive-test"})
+
+        # Confirm no Summary or SessionScore rows were created — the
+        # archive endpoint must not trigger any agent pipeline.
+        from db.models import Summary, SessionScore
+        async with session_factory() as db:
+            self.assertEqual(
+                (await db.execute(select(Summary))).scalars().all(),
+                [],
+            )
+            self.assertEqual(
+                (await db.execute(select(SessionScore))).scalars().all(),
+                [],
+            )
 
 
 if __name__ == "__main__":

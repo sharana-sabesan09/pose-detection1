@@ -228,6 +228,16 @@ export interface SessionPatient {
 
 export interface SessionExerciseEntry {
   exercise:    string;
+  /** Top-level MultiExerciseSession.sessionId — shared across the visit's exercises. */
+  visitId:     string;
+  /**
+   * Per-exercise carve-out from MultiExerciseSession.patient.injuredJoint
+   * .romByExercise. Denormalised onto the entry so each per-exercise upload
+   * to the backend can carry its row without re-deriving from the parent.
+   * `rom: null` = the exercise ran but produced no reps; `null` itself =
+   * walking (which doesn't measure joint ROM).
+   */
+  injuredJointRom: { joint: string; rom: number | null } | null;
   startedAtMs: number;
   endedAtMs:   number;
   durationMs:  number;

@@ -44,14 +44,18 @@ import {
 import { ExercisePipeline } from '../engine/exercise/pipeline';
 import {
   ExerciseType,
+  RepErrors,
   SessionExerciseEntry,
 } from '../engine/exercise/types';
+import { computeLiveErrors, fetchTTSAudio } from '../engine/exercise/liveFeedback';
+import { getSummaryMessage } from '../engine/exercise/feedback';
 import {
   buildExportPayload,
   buildSessionExerciseEntry,
   buildMultiExerciseSession,
   buildMultiSessionExportPayload,
-  postSessionToBackend,
+  postExerciseToBackend,
+  postMultiExerciseArchiveToBackend,
   postMultiSessionToLocalExports,
   shareMultiSessionViaSheet,
 } from '../engine/exercise/exporter';
@@ -103,27 +107,6 @@ function modeForExercise(e: ExerciseType): SessionMode {
   return e === 'walking' ? 'walking' : 'standing';
 }
 
-const CALIBRATION_PREFIX: ExerciseType[] = ['leftSls', 'rightSls', 'leftLsd', 'rightLsd'];
-
-function newCalibrationBatchId(): string {
-  const g = globalThis as unknown as { crypto?: { randomUUID?: () => string } };
-  if (g.crypto?.randomUUID) return g.crypto.randomUUID();
-  return `cal-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function programStartsWithCalibration(program: ExerciseType[]): boolean {
-  if (program.length < CALIBRATION_PREFIX.length) return false;
-  return CALIBRATION_PREFIX.every((ex, idx) => program[idx] === ex);
-}
-
-function calibrationStepForExercise(exercise: string): 1 | 2 | 3 | 4 | undefined {
-  if (exercise === 'leftSls') return 1;
-  if (exercise === 'rightSls') return 2;
-  if (exercise === 'leftLsd') return 3;
-  if (exercise === 'rightLsd') return 4;
-  return undefined;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,6 +139,7 @@ export default function SessionScreen() {
   const detectorsRef    = useRef(new PoseDetectors());
   const sessionStateRef = useRef(sessionState);
   const webViewRef      = useRef<WebView>(null);
+  const ttsRecordingEpochRef = useRef(0);
 
   useEffect(() => { sessionStateRef.current = sessionState; }, [sessionState]);
 
@@ -213,6 +197,44 @@ export default function SessionScreen() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionState, exerciseIdx]);
+
+  // ── Live coaching TTS: every 10s while recording (SLS / LSDT only) ─────────
+  useEffect(() => {
+    if (sessionState !== 'recording') return;
+    if (!currentExercise || currentExercise === 'walking') return;
+
+    ttsRecordingEpochRef.current += 1;
+    const epoch = ttsRecordingEpochRef.current;
+    const exType = feedbackExerciseType(currentExercise);
+
+    const runTick = async () => {
+      if (sessionStateRef.current !== 'recording') return;
+      if (ttsRecordingEpochRef.current !== epoch) return;
+      const pipe = pipelineRef.current;
+      if (!pipe) return;
+      const buf = pipe.getFrameBuffer();
+      if (buf.length === 0) return;
+
+      const errors = computeLiveErrors(buf);
+      const classification = liveErrorsToClassification(errors);
+      const text = getSummaryMessage(errors, classification, exType);
+      const b64 = await fetchTTSAudio(text);
+      if (sessionStateRef.current !== 'recording') return;
+      if (ttsRecordingEpochRef.current !== epoch) return;
+      if (!b64) return;
+      const wv = webViewRef.current;
+      if (!wv) return;
+      wv.injectJavaScript(
+        `(function(){try{if(typeof window.playAudio==='function')window.playAudio(${JSON.stringify(b64)});}catch(e){}})();true;`,
+      );
+    };
+
+    const id = setInterval(runTick, 10000);
+    return () => {
+      clearInterval(id);
+      ttsRecordingEpochRef.current += 1;
+    };
+  }, [sessionState, currentExercise]);
 
   // ── Receive landmarks from MediaPipe WebView ──────────────────────────────
   const onMessage = useCallback((event: WebViewMessageEvent) => {
@@ -273,7 +295,11 @@ export default function SessionScreen() {
     const endedAt   = Date.now();
     try {
       const summary = pipe.finalize();
-      completedEntriesRef.current.push(buildSessionExerciseEntry(summary, startedAt, endedAt));
+      const visitId = sessionIdRef.current;
+      const injuredJointName = patient?.injuredjoint ?? 'unknown';
+      completedEntriesRef.current.push(
+        buildSessionExerciseEntry(summary, startedAt, endedAt, visitId, injuredJointName),
+      );
       framesByExerciseRef.current.push({ exercise: ex, frames: pipe.getFrameBuffer() });
       console.log(`[session] ${ex}: ${summary.reps.length} reps,`, JSON.stringify(summary.summary));
     } catch (e) {
@@ -334,8 +360,8 @@ export default function SessionScreen() {
         console.warn('[export] local artifact write failed:', localRes.error);
       }
 
-      // 3. Backend POST (current backend expects single-exercise payloads).
-      // Fan out one request per exercise entry in this session.
+      // 3. Backend POST — fan out one request per exercise entry, all
+      // tagged with the same visitId so the backend can group them.
       let uploadedCount = 0;
       const backendErrors: string[] = [];
       for (const [i, entry] of entries.entries()) {
@@ -355,6 +381,8 @@ export default function SessionScreen() {
 
         const exercisePayload = buildExportPayload(
           `${sessionId}-${entry.exercise}-${i + 1}`,
+          sessionId,
+          entry.injuredJointRom,
           entry.startedAtMs,
           entry.endedAtMs,
           entry.summary,
@@ -362,19 +390,27 @@ export default function SessionScreen() {
           patientId,
           calibration,
         );
-        const backendRes = await postSessionToBackend(BACKEND_URL, exercisePayload, perExerciseFramesCsv);
+        const backendRes = await postExerciseToBackend(BACKEND_URL, exercisePayload);
         if (backendRes.ok) uploadedCount += 1;
         else {
           backendErrors.push(displayErrorDetail(backendRes.detail ?? backendRes.error));
         }
       }
 
+      // 4. Whole-visit archive — fire-and-forget. Failure here is non-fatal:
+      // the per-exercise uploads above are the source of truth for current
+      // agents, the archive only feeds future longitudinal work.
+      const archiveRes = await postMultiExerciseArchiveToBackend(BACKEND_URL, multiSession);
+      if (!archiveRes.ok) {
+        console.warn('[export] visit archive failed:', archiveRes.error);
+      }
+
       if (backendErrors.length === 0) {
         Alert.alert(
-          'Session exported',
-          localRes.ok && localRes.writtenTo
-            ? `Backend upload succeeded.\nLocal files saved at:\n${localRes.writtenTo}`
-            : 'Uploaded successfully to backend.',
+          'Visit exported',
+          `${entries.length} exercises uploaded for this visit.${
+            localRes.ok && localRes.writtenTo ? `\n\nLocal files: ${localRes.writtenTo}` : ''
+          }`,
         );
       } else {
         const detail = backendErrors.join('\n');
