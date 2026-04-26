@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, model_validator
+from typing import Optional, Self
 from schemas.voice import SessionMetadata
 
 
@@ -83,6 +83,25 @@ class ExerciseSessionResult(BaseModel):
     frameFeaturesCsv: Optional[str] = None
     framesCsv: Optional[str] = None
     sessionMetadata: Optional[SessionMetadata] = None
+    # Optional calibration markers (fixed 4-step protocol on mobile).
+    calibrationBatchId: Optional[str] = None
+    calibrationStep: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _validate_calibration(self) -> Self:
+        has_batch = self.calibrationBatchId is not None
+        has_step = self.calibrationStep is not None
+        if has_batch ^ has_step:
+            raise ValueError("calibrationBatchId and calibrationStep must be provided together")
+        if has_step:
+            if not (1 <= int(self.calibrationStep) <= 4):  # type: ignore[arg-type]
+                raise ValueError("calibrationStep must be between 1 and 4")
+        if has_batch:
+            b = (self.calibrationBatchId or "").strip()
+            if not b:
+                raise ValueError("calibrationBatchId must be non-empty")
+            self.calibrationBatchId = b
+        return self
 
 
 class ExerciseSessionResponse(BaseModel):
@@ -94,3 +113,5 @@ class ExerciseSessionResponse(BaseModel):
     # UUID of the companion Session row — pass to POST /sessions/{id}/frame
     # and POST /exports/session so raw frames land in the DB for the agents.
     linkedSessionId: str
+    calibrationBatchId: Optional[str] = None
+    calibrationStep: Optional[int] = None

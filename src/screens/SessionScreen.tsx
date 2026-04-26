@@ -103,6 +103,27 @@ function modeForExercise(e: ExerciseType): SessionMode {
   return e === 'walking' ? 'walking' : 'standing';
 }
 
+const CALIBRATION_PREFIX: ExerciseType[] = ['leftSls', 'rightSls', 'leftLsd', 'rightLsd'];
+
+function newCalibrationBatchId(): string {
+  const g = globalThis as unknown as { crypto?: { randomUUID?: () => string } };
+  if (g.crypto?.randomUUID) return g.crypto.randomUUID();
+  return `cal-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function programStartsWithCalibration(program: ExerciseType[]): boolean {
+  if (program.length < CALIBRATION_PREFIX.length) return false;
+  return CALIBRATION_PREFIX.every((ex, idx) => program[idx] === ex);
+}
+
+function calibrationStepForExercise(exercise: string): 1 | 2 | 3 | 4 | undefined {
+  if (exercise === 'leftSls') return 1;
+  if (exercise === 'rightSls') return 2;
+  if (exercise === 'leftLsd') return 3;
+  if (exercise === 'rightLsd') return 4;
+  return undefined;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,6 +149,7 @@ export default function SessionScreen() {
   const completedEntriesRef  = useRef<SessionExerciseEntry[]>([]);
   const framesByExerciseRef  = useRef<{ exercise: string; frames: ReturnType<ExercisePipeline['getFrameBuffer']> }[]>([]);
   const walkingRecordedFramesRef = useRef<RecordedFrame[]>([]);  // for analyzeRecording dashboard data
+  const calibrationBatchIdRef = useRef<string | null>(null);
 
   const pipelineRef     = useRef<ExercisePipeline | null>(null);
   const profileRef      = useRef<UserProfile | null>(null);
@@ -222,6 +244,9 @@ export default function SessionScreen() {
       Alert.alert('No exercises prescribed', 'This patient has no curr_program entries.');
       return;
     }
+    calibrationBatchIdRef.current = programStartsWithCalibration(patient.curr_program)
+      ? newCalibrationBatchId()
+      : null;
     sessionIdRef.current = new Date().toISOString();
     sessionStartedAtRef.current = Date.now();
     completedEntriesRef.current = [];
@@ -314,15 +339,30 @@ export default function SessionScreen() {
       let uploadedCount = 0;
       const backendErrors: string[] = [];
       for (const [i, entry] of entries.entries()) {
+        const frames = framesByExerciseRef.current[i]?.frames ?? [];
+        const mode = modeForExercise(entry.exercise as ExerciseType);
+        const recorded: RecordedFrame[] = frames.map(f => ({
+          t: f.timestamp,
+          pose: f.landmarks as unknown as PoseFrame,
+        }));
+        const perExerciseFramesCsv = buildLandmarkCsv(recorded, mode);
+
+        const step = calibrationStepForExercise(entry.exercise);
+        const calibration =
+          calibrationBatchIdRef.current && step
+            ? { batchId: calibrationBatchIdRef.current, step }
+            : undefined;
+
         const exercisePayload = buildExportPayload(
           `${sessionId}-${entry.exercise}-${i + 1}`,
           entry.startedAtMs,
           entry.endedAtMs,
           entry.summary,
-          framesByExerciseRef.current[i]?.frames ?? [],
+          frames,
           patientId,
+          calibration,
         );
-        const backendRes = await postSessionToBackend(BACKEND_URL, exercisePayload);
+        const backendRes = await postSessionToBackend(BACKEND_URL, exercisePayload, perExerciseFramesCsv);
         if (backendRes.ok) uploadedCount += 1;
         else {
           backendErrors.push(displayErrorDetail(backendRes.detail ?? backendRes.error));
