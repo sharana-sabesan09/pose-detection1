@@ -523,7 +523,6 @@ export default function SessionScreen() {
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
 
-  const liveMode: SessionMode = currentExercise ? modeForExercise(currentExercise) : 'standing';
   const currentExerciseLabel = currentExercise ? EXERCISE_LABELS[currentExercise] : 'Session';
 
   return (
@@ -600,32 +599,6 @@ export default function SessionScreen() {
             onStartAnotherSession={startSession}
             onGoHome={() => navigation.navigate('Home')}
           />
-          <View style={styles.modeRow}>
-            {[
-              { id: 'standing', label: 'Standing', sub: 'Balance' },
-              { id: 'transition', label: 'Sit -> Stand', sub: 'Transition' },
-              { id: 'walking', label: 'Walking', sub: 'Gait' },
-            ].map(mode => {
-              const active = liveMode === mode.id;
-              return (
-                <View key={mode.id} style={styles.modeCard}>
-                  <View
-                    style={[
-                      styles.modePill,
-                      active ? styles.modePillActive : styles.modePillInactive,
-                    ]}
-                  >
-                    <Text style={[styles.modeLabel, active && styles.modeLabelActive]}>
-                      {mode.label}
-                    </Text>
-                    <Text style={[styles.modeSub, active && styles.modeSubActive]}>
-                      {mode.sub}
-                    </Text>
-                  </View>
-                </View>
-              );
-            })}
-          </View>
         </View>
       </SafeAreaView>
     </View>
@@ -1111,45 +1084,5 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.handBold,
     fontSize: 14,
     color: COLORS.ink,
-  },
-  modeRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  modeCard: {
-    flex: 1,
-  },
-  modePill: {
-    borderRadius: 12,
-    borderWidth: 1.5,
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    alignItems: 'center',
-  },
-  modePillActive: {
-    backgroundColor: 'rgba(243,236,219,0.92)',
-    borderColor: 'rgba(243,236,219,0.92)',
-  },
-  modePillInactive: {
-    backgroundColor: 'rgba(243,236,219,0.12)',
-    borderColor: 'rgba(243,236,219,0.35)',
-  },
-  modeLabel: {
-    fontFamily: FONTS.display,
-    fontSize: 16,
-    color: COLORS.paper,
-  },
-  modeLabelActive: {
-    color: COLORS.ink,
-  },
-  modeSub: {
-    marginTop: 1,
-    fontFamily: FONTS.hand,
-    fontSize: 10,
-    color: 'rgba(243,236,219,0.55)',
-    letterSpacing: 1,
-  },
-  modeSubActive: {
-    color: COLORS.ink3,
   },
 });
