@@ -36,3 +36,4 @@ __pycache__/
 
 # Session artifacts written by the phone via /exports/session
 ios/zeticllmreactnativetemplate.xcworkspace/xcuserdata/sharanasabesan9.xcuserdatad/UserInterfaceState.xcuserstate/
+.claude/settings.local.json

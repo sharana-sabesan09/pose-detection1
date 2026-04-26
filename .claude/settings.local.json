@@ -22,7 +22,10 @@
       "Bash(railway variables *)",
       "Bash(echo \"exit: $?\")",
       "WebSearch",
-      "WebFetch(domain:discuss.ai.google.dev)"
+      "WebFetch(domain:discuss.ai.google.dev)",
+
+      "Bash(uv run *)"
+
     ]
   }
 }
