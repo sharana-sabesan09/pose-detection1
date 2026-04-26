@@ -1,0 +1,7 @@
+rep_id,side,depth_deg,rom_ratio,fppa_peak,fppa_at_depth,trunk_lean_peak,trunk_flex_peak,pelvic_drop_peak,pelvic_shift_peak,hip_adduction_peak,knee_offset_peak,sway_norm,smoothness,errors_count,classification,err_knee_valgus,err_trunk_lean,err_trunk_flex,err_pelvic_drop,err_pelvic_shift,err_hip_adduction,err_knee_over_foot,err_balance,start_frame,bottom_frame,end_frame,duration_ms,confidence
+1,left,50.08,0.371,50.08,44.95,4.18,33.87,43.90,0.0457,174.07,9.7674,0.0155,479.417,4,poor,1,0,0,1,0,1,1,0,34,39,44,182,0.687
+1,left,105.15,0.779,105.15,68.40,17.13,52.56,43.49,0.0421,0.00,1.8562,0.0141,722.856,5,poor,1,1,0,1,1,0,1,0,7,12,18,279,0.595
+2,left,93.11,0.690,93.11,72.48,21.37,45.80,44.99,0.0209,0.00,2.0211,0.0048,507.428,5,poor,1,1,0,1,1,0,1,0,257,261,275,393,0.683
+1,right,89.92,0.666,89.92,56.92,31.14,34.37,31.73,0.0096,150.17,0.8991,0.0055,2468.430,5,poor,1,1,0,1,1,0,1,0,8,12,19,384,0.429
+2,right,67.62,0.501,67.62,58.73,30.07,35.82,28.76,0.0613,153.22,0.9604,0.0169,805.912,6,poor,1,1,0,1,1,1,1,0,51,63,69,535,0.416
+3,right,113.50,0.841,113.50,40.06,29.25,32.47,28.52,0.0195,165.39,0.8056,0.0083,982.442,6,poor,1,1,0,1,1,1,1,0,100,105,112,1855,0.638

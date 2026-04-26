@@ -1,0 +1,165 @@
+{
+  "sessionId": "2026-04-26T04:23:27.704Z",
+  "startedAtMs": 1777177407704,
+  "endedAtMs": 1777177455175,
+  "durationMs": 47471,
+  "patient": {
+    "patientId": "pt-1777163648069-95ejizak",
+    "injuredJoint": {
+      "name": "right_knee",
+      "romByExercise": {
+        "leftSls": null,
+        "rightSls": 0.48056003678262577,
+        "leftLsd": null,
+        "rightLsd": null
+      }
+    }
+  },
+  "exercises": [
+    {
+      "exercise": "leftSls",
+      "startedAtMs": 1777177413547,
+      "endedAtMs": 1777177419342,
+      "durationMs": 5795,
+      "numReps": 0,
+      "summary": {
+        "exercise": "leftSls",
+        "reps": [],
+        "summary": {
+          "numReps": 0,
+          "avgDepth": null,
+          "minDepth": null,
+          "avgFppa": null,
+          "maxFppa": null,
+          "consistency": null,
+          "overallRating": "poor"
+        }
+      }
+    },
+    {
+      "exercise": "rightSls",
+      "startedAtMs": 1777177421086,
+      "endedAtMs": 1777177427845,
+      "durationMs": 6759,
+      "numReps": 1,
+      "summary": {
+        "exercise": "rightSls",
+        "reps": [
+          {
+            "repId": 1,
+            "side": "right",
+            "timing": {
+              "startFrame": 78,
+              "bottomFrame": 139,
+              "endFrame": 170,
+              "durationMs": 1599
+            },
+            "features": {
+              "kneeFlexionDeg": 64.87560496565447,
+              "romRatio": 0.48056003678262577,
+              "fppaPeak": 64.87560496565447,
+              "fppaAtDepth": 64.87560496565447,
+              "trunkLeanPeak": 3.092834792992314,
+              "trunkFlexPeak": 32.128286003786634,
+              "pelvicDropPeak": 2.874006836478038,
+              "pelvicShiftPeak": 0.04385514557361603,
+              "hipAdductionPeak": 179.81563636549225,
+              "kneeOffsetPeak": 0.9791106402358796,
+              "swayNorm": 0.025914190373003396,
+              "smoothness": 287.3947638460996,
+              "pelvisVertDisplacement": 0.03999754786491394,
+              "swingHeelContactFrames": 0
+            },
+            "errors": {
+              "kneeValgus": true,
+              "trunkLean": false,
+              "trunkFlex": false,
+              "pelvicDrop": false,
+              "pelvicShift": false,
+              "hipAdduction": true,
+              "kneeOverFoot": true,
+              "balance": false
+            },
+            "score": {
+              "totalErrors": 3,
+              "classification": "fair"
+            },
+            "confidence": 0.8935090523466841
+          }
+        ],
+        "summary": {
+          "numReps": 1,
+          "avgDepth": 64.87560496565447,
+          "minDepth": 64.87560496565447,
+          "avgFppa": 64.87560496565447,
+          "maxFppa": 64.87560496565447,
+          "consistency": 1,
+          "overallRating": "fair"
+        }
+      }
+    },
+    {
+      "exercise": "leftLsd",
+      "startedAtMs": 1777177429924,
+      "endedAtMs": 1777177436583,
+      "durationMs": 6659,
+      "numReps": 0,
+      "summary": {
+        "exercise": "leftLsd",
+        "reps": [],
+        "summary": {
+          "numReps": 0,
+          "avgDepth": null,
+          "minDepth": null,
+          "avgFppa": null,
+          "maxFppa": null,
+          "consistency": null,
+          "overallRating": "poor"
+        }
+      }
+    },
+    {
+      "exercise": "rightLsd",
+      "startedAtMs": 1777177438462,
+      "endedAtMs": 1777177447386,
+      "durationMs": 8924,
+      "numReps": 0,
+      "summary": {
+        "exercise": "rightLsd",
+        "reps": [],
+        "summary": {
+          "numReps": 0,
+          "avgDepth": null,
+          "minDepth": null,
+          "avgFppa": null,
+          "maxFppa": null,
+          "consistency": null,
+          "overallRating": "poor"
+        }
+      }
+    },
+    {
+      "exercise": "walking",
+      "startedAtMs": 1777177449347,
+      "endedAtMs": 1777177455174,
+      "durationMs": 5827,
+      "numReps": 0,
+      "summary": {
+        "exercise": "walking",
+        "reps": [],
+        "summary": {
+          "numReps": 0,
+          "avgDepth": null,
+          "minDepth": null,
+          "avgFppa": null,
+          "maxFppa": null,
+          "consistency": null,
+          "overallRating": "poor",
+          "gaitAsymmetry": 0.04487262381999226,
+          "lateralSwayRange": 0.2865412877872586,
+          "stabilityScore": 57.58556615396958
+        }
+      }
+    }
+  ]
+}

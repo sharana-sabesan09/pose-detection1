@@ -30,7 +30,7 @@
  *     giving users immediate feedback without needing to submit.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -42,12 +42,38 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  PermissionsAndroid,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { UserProfile } from '../types';
 import { upsertPatientProfile } from '../engine/backendClient';
 import { generatePatientId, saveStoredProfile } from '../engine/profileStorage';
+
+type VoiceModule = {
+  start: (locale: string) => Promise<void>;
+  stop: () => Promise<void>;
+  destroy: () => Promise<void>;
+  removeAllListeners: () => void;
+  onSpeechResults?: (e: { value?: string[] }) => void;
+  onSpeechError?: (e?: unknown) => void;
+  onSpeechEnd?: () => void;
+};
+
+let cachedVoiceModule: VoiceModule | null | undefined;
+
+function getVoiceModule(): VoiceModule | null {
+  if (cachedVoiceModule !== undefined) return cachedVoiceModule;
+  try {
+    // Lazy require prevents startup crash if the native module isn't linked yet.
+    const voice = require('@react-native-voice/voice').default as VoiceModule;
+    cachedVoiceModule = voice;
+    return voice;
+  } catch {
+    cachedVoiceModule = null;
+    return null;
+  }
+}
 
 // The navigation prop gives this screen the ability to switch to another screen.
 // Specifically, after saving the profile we call navigation.replace('Session')
@@ -144,6 +170,16 @@ export default function IntakeScreen({ navigation }: Props) {
   const [gender, setGender] = useState<Gender>('male');
   const [height, setHeight] = useState('');
   const [weight, setWeight] = useState('');
+  const [symptoms, setSymptoms] = useState('');
+  const [isListening, setIsListening] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      const voice = getVoiceModule();
+      if (!voice) return;
+      voice.destroy().then(voice.removeAllListeners).catch(() => {});
+    };
+  }, []);
 
   /**
    * handleStart — VALIDATES THE FORM, BUILDS THE PROFILE, AND SAVES IT
@@ -207,6 +243,56 @@ export default function IntakeScreen({ navigation }: Props) {
     // Navigate to Session. `replace` removes the Intake screen from the stack
     // so the back button doesn't bring the user back to the form.
     navigation.replace('Main');
+  };
+
+  const ensureMicPermission = async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') return true;
+    const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+    return granted === PermissionsAndroid.RESULTS.GRANTED;
+  };
+
+  const handleMicPress = async () => {
+    try {
+      const voice = getVoiceModule();
+      if (!voice) {
+        Alert.alert(
+          'Voice module not ready',
+          'Native voice support is not linked yet. Rebuild iOS after pod install.',
+        );
+        return;
+      }
+
+      if (isListening) {
+        await voice.stop();
+        setIsListening(false);
+        return;
+      }
+
+      const permissionGranted = await ensureMicPermission();
+      if (!permissionGranted) {
+        Alert.alert('Microphone required', 'Please allow microphone access to dictate symptoms.');
+        return;
+      }
+
+      voice.onSpeechResults = e => {
+        const nextText = e.value?.[0]?.trim();
+        if (!nextText) return;
+        setSymptoms(nextText);
+      };
+
+      voice.onSpeechError = () => {
+        setIsListening(false);
+        Alert.alert('Voice input failed', 'Please try again or type your symptoms manually.');
+      };
+
+      voice.onSpeechEnd = () => setIsListening(false);
+
+      await voice.start('en-US');
+      setIsListening(true);
+    } catch (e) {
+      setIsListening(false);
+      Alert.alert('Voice input failed', (e as Error).message);
+    }
   };
 
   // ---------- RENDER ----------
@@ -334,6 +420,39 @@ export default function IntakeScreen({ navigation }: Props) {
                 />
                 <Text style={styles.unit}>kg</Text>
               </View>
+            </View>
+
+            {/* SYMPTOMS FIELD + MIC */}
+            <View style={styles.field}>
+              <Text style={styles.label}>Symptoms (optional)</Text>
+              <View style={styles.voicePromptCard}>
+                <Text style={styles.voicePromptTitle}>Please tell us about:</Text>
+                <Text style={styles.voicePromptItem}>- Your current pain level (0-10)</Text>
+                <Text style={styles.voicePromptItem}>- Your rehab goals for this cycle</Text>
+                <Text style={styles.voicePromptItem}>- Any recent history of falls</Text>
+                <Text style={styles.voicePromptItem}>- Any range of motion restrictions</Text>
+              </View>
+              <View style={styles.symptomsHeaderRow}>
+                <Text style={styles.fieldNote}>
+                  Tap the microphone and speak. You can also type below.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.micBtn, isListening && styles.micBtnActive]}
+                  onPress={handleMicPress}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.micIcon}>{isListening ? '◼' : '🎤'}</Text>
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                style={[styles.input, styles.symptomsInput]}
+                value={symptoms}
+                onChangeText={setSymptoms}
+                placeholder="e.g. right knee pain, unstable when stepping down"
+                placeholderTextColor="#3a5068"
+                multiline
+                textAlignVertical="top"
+              />
             </View>
 
             {/*
@@ -476,6 +595,55 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: C.note,
     lineHeight: 16,
+  },
+  voicePromptCard: {
+    backgroundColor: 'rgba(0, 212, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 212, 255, 0.2)',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  voicePromptTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: C.accent,
+    marginBottom: 2,
+  },
+  voicePromptItem: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: C.text,
+    opacity: 0.9,
+  },
+  symptomsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  symptomsInput: {
+    minHeight: 96,
+  },
+  micBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.card,
+  },
+  micBtnActive: {
+    borderColor: C.accent,
+    backgroundColor: C.accentDim,
+  },
+  micIcon: {
+    fontSize: 18,
+    color: C.accent,
+    fontWeight: '700',
   },
 
   // ---- GENDER SELECTOR ----

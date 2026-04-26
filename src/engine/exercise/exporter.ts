@@ -231,6 +231,35 @@ export interface BackendExportResult {
   error?:    string;
 }
 
+function n(v: number | null | undefined): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
+function sanitizeSessionSummaryForBackend(summary: SessionSummary): SessionSummary {
+  return {
+    ...summary,
+    summary: {
+      ...summary.summary,
+      // Backend schema expects numeric floats; walking/no-rep sessions may carry nulls.
+      avgDepth: n(summary.summary.avgDepth),
+      minDepth: n(summary.summary.minDepth),
+      avgFppa: n(summary.summary.avgFppa),
+      maxFppa: n(summary.summary.maxFppa),
+      consistency: n(summary.summary.consistency),
+    },
+  };
+}
+
+function formatErrorDetail(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value == null) return '';
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 let cachedAccessToken: string | null = null;
 
 async function getBackendToken(baseUrl: string, timeoutMs: number): Promise<string> {
@@ -281,6 +310,7 @@ export async function postSessionToBackend(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const safeSummary = sanitizeSessionSummaryForBackend(payload.summary);
     const token = await getBackendToken(baseUrl, timeoutMs);
     const res = await fetch(url, {
       method:  'POST',
@@ -295,7 +325,7 @@ export async function postSessionToBackend(
         durationMs: payload.durationMs,
         exercise: payload.exercise,
         numReps: payload.numReps,
-        summary: payload.summary,
+        summary: safeSummary,
         patientId: payload.patientId ?? null,
         repsCsv: payload.repsCsv,
         frameFeaturesCsv: payload.frameFeaturesCsv,
@@ -310,7 +340,7 @@ export async function postSessionToBackend(
       let detail = trimmed;
       try {
         const parsed = trimmed ? JSON.parse(trimmed) : null;
-        if (parsed?.detail) detail = String(parsed.detail);
+        if (parsed?.detail !== undefined) detail = formatErrorDetail(parsed.detail);
       } catch {
         // keep raw text fallback
       }
@@ -510,7 +540,7 @@ export async function postMultiSessionToBackend(
       let detail = trimmed;
       try {
         const parsed = trimmed ? JSON.parse(trimmed) : null;
-        if (parsed?.detail) detail = String(parsed.detail);
+        if (parsed?.detail !== undefined) detail = formatErrorDetail(parsed.detail);
       } catch { /* keep raw */ }
       return {
         ok: false,

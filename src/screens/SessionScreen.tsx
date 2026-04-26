@@ -26,7 +26,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, Platform, Alert,
+  SafeAreaView, Platform, Alert, ScrollView,
 } from 'react-native';
 import WebView, { WebViewMessageEvent } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -50,10 +50,11 @@ import {
   SessionExerciseEntry,
 } from '../engine/exercise/types';
 import {
+  buildExportPayload,
   buildSessionExerciseEntry,
   buildMultiExerciseSession,
   buildMultiSessionExportPayload,
-  postMultiSessionToBackend,
+  postSessionToBackend,
   postMultiSessionToLocalExports,
   shareMultiSessionViaSheet,
 } from '../engine/exercise/exporter';
@@ -84,6 +85,16 @@ const DEFAULT_SCORES: RiskScores = {
   lateralSway:      50,
   overallFallRisk:  50,
 };
+
+function displayErrorDetail(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value == null) return 'Unknown backend error';
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
 
 const EXERCISE_LABELS: Record<ExerciseType, string> = {
   leftSls:  'Left Single-Leg Squat',
@@ -303,9 +314,27 @@ export default function SessionScreen() {
         console.warn('[export] local artifact write failed:', localRes.error);
       }
 
-      // 3. Backend POST — see TODO in exporter for matching backend route work
-      const backendRes = await postMultiSessionToBackend(BACKEND_URL, payload);
-      if (backendRes.ok) {
+      // 3. Backend POST (current backend expects single-exercise payloads).
+      // Fan out one request per exercise entry in this session.
+      let uploadedCount = 0;
+      const backendErrors: string[] = [];
+      for (const [i, entry] of entries.entries()) {
+        const exercisePayload = buildExportPayload(
+          `${sessionId}-${entry.exercise}-${i + 1}`,
+          entry.startedAtMs,
+          entry.endedAtMs,
+          entry.summary,
+          framesByExerciseRef.current[i]?.frames ?? [],
+          patientId,
+        );
+        const backendRes = await postSessionToBackend(BACKEND_URL, exercisePayload);
+        if (backendRes.ok) uploadedCount += 1;
+        else {
+          backendErrors.push(displayErrorDetail(backendRes.detail ?? backendRes.error));
+        }
+      }
+
+      if (backendErrors.length === 0) {
         Alert.alert(
           'Session exported',
           localRes.ok && localRes.writtenTo
@@ -313,12 +342,18 @@ export default function SessionScreen() {
             : 'Uploaded successfully to backend.',
         );
       } else {
-        const detail = backendRes.detail ?? backendRes.error ?? 'Unknown backend error';
+        const detail = backendErrors.join('\n');
         console.error('[export] backend POST failed:', detail);
         if (localRes.ok && localRes.writtenTo) {
-          Alert.alert('Backend upload failed (non-fatal)', `${detail}\n\nLocal: ${localRes.writtenTo}`);
+          Alert.alert(
+            'Backend upload partially failed (non-fatal)',
+            `${uploadedCount}/${entries.length} exercise uploads succeeded.\n\n${detail}\n\nLocal: ${localRes.writtenTo}`,
+          );
         } else {
-          Alert.alert('Backend export failed', detail);
+          Alert.alert(
+            'Backend upload partially failed',
+            `${uploadedCount}/${entries.length} exercise uploads succeeded.\n\n${detail}`,
+          );
         }
         await shareMultiSessionViaSheet(payload);
       }
@@ -382,29 +417,37 @@ export default function SessionScreen() {
       )}
 
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
-        <View style={styles.topBar}>
-          <Text style={styles.title}>SENTINEL</Text>
-          <StatusPill ready={initialized} />
-          <TouchableOpacity style={styles.resetBtn} onPress={handleReset}>
-            <Text style={styles.resetBtnText}>Reset</Text>
-          </TouchableOpacity>
-        </View>
+        <ScrollView
+          style={styles.overlayScroll}
+          contentContainerStyle={styles.overlayScrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.topBar}>
+            <Text style={styles.title}>SENTINEL</Text>
+            <StatusPill ready={initialized} />
+            <TouchableOpacity style={styles.resetBtn} onPress={handleReset}>
+              <Text style={styles.resetBtnText}>Reset</Text>
+            </TouchableOpacity>
+          </View>
 
-        <View style={{ flex: 1 }} pointerEvents="none" />
+          <View style={{ flex: 1 }} pointerEvents="none" />
 
-        <View pointerEvents="auto">
-          <ScoreDashboard scores={scores} mode={liveMode} initialized={initialized} />
-          <SessionControls
-            state={sessionState}
-            patient={patient}
-            currentExercise={currentExercise}
-            exerciseIdx={exerciseIdx}
-            timeLeft={timeLeft}
-            onStartSession={startSession}
-            onStartExercise={startCurrentExercise}
-            onStop={stopSessionEarly}
-          />
-        </View>
+          <View pointerEvents="auto">
+            <ScoreDashboard scores={scores} mode={liveMode} initialized={initialized} />
+            <SessionControls
+              state={sessionState}
+              patient={patient}
+              currentExercise={currentExercise}
+              exerciseIdx={exerciseIdx}
+              timeLeft={timeLeft}
+              onStartSession={startSession}
+              onStartExercise={startCurrentExercise}
+              onStop={stopSessionEarly}
+              onStartAnotherSession={startSession}
+            />
+          </View>
+        </ScrollView>
       </SafeAreaView>
     </View>
   );
@@ -416,7 +459,7 @@ export default function SessionScreen() {
 
 function SessionControls({
   state, patient, currentExercise, exerciseIdx, timeLeft,
-  onStartSession, onStartExercise, onStop,
+  onStartSession, onStartExercise, onStop, onStartAnotherSession,
 }: {
   state:           SessionState;
   patient:         PatientInfo | null;
@@ -426,6 +469,7 @@ function SessionControls({
   onStartSession:  () => void;
   onStartExercise: () => void;
   onStop:          () => void;
+  onStartAnotherSession: () => void;
 }) {
   if (state === 'analyzing') {
     return (
@@ -437,8 +481,14 @@ function SessionControls({
 
   if (state === 'done') {
     return (
-      <View style={styles.controlBar}>
-        <Text style={styles.analyzingText}>Done.</Text>
+      <View style={styles.promptBar}>
+        <Text style={styles.promptTitle}>Session complete</Text>
+        <Text style={styles.subtle}>
+          One full session includes 2 squats, 2 step-downs, and walking.
+        </Text>
+        <TouchableOpacity style={styles.startBtn} onPress={onStartAnotherSession}>
+          <Text style={styles.startBtnText}>⬤  Start Another Session</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -526,6 +576,8 @@ const C = {
 const styles = StyleSheet.create({
   root:    { flex: 1, backgroundColor: '#000' },
   overlay: { flex: 1 },
+  overlayScroll: { flex: 1 },
+  overlayScrollContent: { flexGrow: 1 },
 
   topBar: {
     flexDirection: 'row', alignItems: 'center',

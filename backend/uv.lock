@@ -887,6 +887,23 @@ wheels = [
 ]
 
 [[package]]
+name = "elevenlabs"
+version = "2.44.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "requests" },
+    { name = "typing-extensions" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a8/ea/e6283ef10e1e6d13639e80c5ac562c49cd932626c8d7b3a6f18d83aeb8e0/elevenlabs-2.44.0.tar.gz", hash = "sha256:1e061032aadbfed8e435ec1c5986bcf09937f921c7ef02d3750a55fba4be051a", size = 551614, upload-time = "2026-04-21T11:00:49.98Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/3c/0f637dbfb61bbe3491accd31e430b0dcfcc7d77377d2c58980d6fe50fdab/elevenlabs-2.44.0-py3-none-any.whl", hash = "sha256:289ba6cdcdd2f809e1e3f18571a273aa5bad4ccff8070d4c2830798695c058fe", size = 1513401, upload-time = "2026-04-21T11:00:47.855Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.136.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3798,6 +3815,7 @@ dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "chromadb" },
+    { name = "elevenlabs" },
     { name = "fastapi" },
     { name = "llama-index" },
     { name = "llama-index-embeddings-huggingface" },
@@ -3821,6 +3839,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "asyncpg", specifier = ">=0.29.0" },
     { name = "chromadb", specifier = ">=0.5.0" },
+    { name = "elevenlabs", specifier = ">=2.0.0" },
     { name = "fastapi", specifier = ">=0.111.0" },
     { name = "llama-index", specifier = ">=0.10.0" },
     { name = "llama-index-embeddings-huggingface", specifier = ">=0.2.0" },

@@ -34,7 +34,9 @@
 	<key>NSCameraUsageDescription</key>
 	<string>SENTINEL uses the camera to watch how you move and calculate real-time fall risk scores. No video is recorded or uploaded.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>SENTINEL uses the camera pipeline which requires microphone access on iOS. No audio is recorded.</string>
+	<string>SENTINEL uses your microphone for voice symptom input on the intake form.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>SENTINEL uses speech recognition to transcribe what you say into the symptoms field.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string></string>
 	<key>RCTNewArchEnabled</key>
