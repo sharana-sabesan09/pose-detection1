@@ -38,9 +38,14 @@ _ERROR_THRESHOLDS: dict[str, float] = {
     "hip_adduction": 10.0,
     "knee_offset":   0.20,
 }
+_CLINICAL_POSE_FIELDS = set(_EXPECTED_ROM) | set(_ERROR_THRESHOLDS)
 
 
-def build_pose_data_coverage(frame_count: int, joint_stats: dict[str, dict]) -> dict:
+def build_pose_data_coverage(
+    frame_count: int,
+    joint_stats: dict[str, dict],
+    ignored_fields: set[str] | None = None,
+) -> dict:
     missing_fields: list[str] = []
     notes: list[str] = []
 
@@ -48,10 +53,15 @@ def build_pose_data_coverage(frame_count: int, joint_stats: dict[str, dict]) -> 
         missing_fields.append("pose_frames")
         notes.append("no frames recorded")
     if frame_count > 0 and not joint_stats:
-        missing_fields.append("joint_stats")
-        notes.append("frames were stored without numeric joint measurements")
+        missing_fields.append("clinical_pose_metrics")
+        notes.append("frames were stored without supported clinical pose metrics")
     if not missing_fields and frame_count > 0:
-        notes.append(f"{frame_count} frames analysed, {len(joint_stats)} joints tracked")
+        notes.append(f"{frame_count} frames analysed, {len(joint_stats)} clinical pose signals tracked")
+    if ignored_fields:
+        notes.append(
+            "ignored non-clinical frame fields: "
+            + ", ".join(sorted(ignored_fields))
+        )
 
     return {
         "required_fields_present": not missing_fields,
@@ -121,10 +131,14 @@ async def run_pose_analysis(session_id: str, db: AsyncSession, patient_id: str |
 
     joint_values: dict[str, list[float]] = {}
     joint_frame_counts: dict[str, int] = {}
+    ignored_fields: set[str] = set()
 
     for frame in frames:
         angles: dict = frame.angles_json
         for joint, angle in angles.items():
+            if joint not in _CLINICAL_POSE_FIELDS:
+                ignored_fields.add(joint)
+                continue
             if isinstance(angle, (int, float)):
                 val = float(angle)
                 joint_values.setdefault(joint, []).append(val)
@@ -142,7 +156,8 @@ async def run_pose_analysis(session_id: str, db: AsyncSession, patient_id: str |
         rom = mx - mn
 
         joint_stats[joint] = {"mean": round(mean, 3), "min": round(mn, 3), "max": round(mx, 3), "std": round(std, 3), "rom": round(rom, 3)}
-        rom_contributions.append(rom)
+        if joint in _EXPECTED_ROM:
+            rom_contributions.append(rom)
 
         expected = _EXPECTED_ROM.get(joint)
         if expected and (rom / expected) < 0.40:
@@ -157,7 +172,11 @@ async def run_pose_analysis(session_id: str, db: AsyncSession, patient_id: str |
     rom_score = min(100.0, (raw_rom / avg_expected) * 100.0)
 
     frame_count = len(frames)
-    data_coverage = build_pose_data_coverage(frame_count=frame_count, joint_stats=joint_stats)
+    data_coverage = build_pose_data_coverage(
+        frame_count=frame_count,
+        joint_stats=joint_stats,
+        ignored_fields=ignored_fields,
+    )
 
     output = PoseAnalysisOutput(
         rom_score=round(rom_score, 2),

@@ -92,6 +92,9 @@ class ReporterResponse(Model):
     session_highlights: list
     recommendations: list
     evidence_map: dict = {}
+    contributing_factors: list = []
+    good_reps: Optional[int] = None
+    filtered_reps: Optional[int] = None
     reportability: str = "unknown"
     data_coverage: dict = {}
     error: Optional[str] = None

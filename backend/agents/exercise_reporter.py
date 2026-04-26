@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.hipaa import hipaa_wrap
 from agents._client import gemini_client as _client, GEMINI_MODEL as _MODEL
-from db.models import Session, SessionScore, Summary
+from db.models import Exercise, Session, SessionScore, Summary
 from rag.retriever import retrieve_clinical_context
 from schemas.exercise import ExerciseResult
 from schemas.session import ExerciseReporterOutput
@@ -220,6 +220,75 @@ def _build_exercise_evidence_map(result: ExerciseResult, stats: dict) -> dict[st
     return evidence_map
 
 
+def _build_subjective_context(metadata_json: dict | None) -> tuple[str, list[str]]:
+    derived = ((metadata_json or {}).get("voice") or {}).get("derived") or {}
+    if not derived:
+        return "No voice-derived subjective context available.", []
+
+    lines: list[str] = []
+    evidence: list[str] = []
+
+    pain_score = derived.get("painScore")
+    if pain_score is not None:
+        lines.append(f"Voice-derived pain score: {pain_score}/10")
+        evidence.append(f"voice_pain_score={pain_score}")
+
+    pain_locations = [loc for loc in derived.get("painLocations", []) if loc]
+    if pain_locations:
+        joined = ", ".join(pain_locations)
+        lines.append(f"Pain locations: {joined}")
+        evidence.append(f"voice_pain_locations={joined}")
+
+    session_goals = [goal for goal in derived.get("sessionGoals", []) if goal]
+    if session_goals:
+        joined = ", ".join(session_goals)
+        lines.append(f"Patient-stated goals: {joined}")
+        evidence.append(f"voice_session_goals={joined}")
+
+    symptoms = [symptom for symptom in derived.get("symptoms", []) if symptom]
+    if symptoms:
+        joined = ", ".join(symptoms)
+        lines.append(f"Symptoms: {joined}")
+        evidence.append(f"voice_symptoms={joined}")
+
+    affected_side = derived.get("affectedSide")
+    if affected_side and affected_side != "unknown":
+        lines.append(f"Affected side: {affected_side}")
+        evidence.append(f"voice_affected_side={affected_side}")
+
+    red_flags = [flag for flag in derived.get("redFlags", []) if flag]
+    if red_flags:
+        joined = ", ".join(red_flags)
+        lines.append(f"Red flags: {joined}")
+        evidence.append(f"voice_red_flags={joined}")
+
+    subjective_summary = derived.get("subjectiveSummary")
+    if subjective_summary:
+        lines.append(f"Subjective summary: {subjective_summary}")
+        evidence.append(f"voice_subjective_summary={subjective_summary}")
+
+    return "\n".join(lines) if lines else "No voice-derived subjective context available.", evidence
+
+
+def _build_injured_joint_context(injured_joint_rom: dict | None) -> tuple[str, list[str]]:
+    if not injured_joint_rom:
+        return "No stored injured-joint ROM context available.", []
+
+    joint_name = injured_joint_rom.get("joint")
+    rom_value = injured_joint_rom.get("rom")
+    if not joint_name:
+        return "No stored injured-joint ROM context available.", []
+    if rom_value is None:
+        return (
+            f"Injured joint on this exercise: {joint_name}. No ROM value was captured for this upload.",
+            [f"injured_joint={joint_name}", "injured_joint_rom=null"],
+        )
+    return (
+        f"Injured joint on this exercise: {joint_name}. Exercise-specific ROM: {rom_value}.",
+        [f"injured_joint={joint_name}", f"injured_joint_rom={rom_value}"],
+    )
+
+
 async def run_exercise_reporter(
     result: ExerciseResult,
     session_id: str,
@@ -235,6 +304,33 @@ async def run_exercise_reporter(
     stats = _compute_exercise_stats(result)
     evidence_map = _build_exercise_evidence_map(result, stats)
     pid = patient_id or "anonymous"
+
+    stored_exercise_result = await db.execute(
+        select(Exercise)
+        .where(Exercise.linked_session_id == session_id)
+        .order_by(Exercise.created_at.desc())
+        .limit(1)
+    )
+    stored_exercise = stored_exercise_result.scalars().first()
+
+    stored_metadata = (
+        stored_exercise.metadata_json
+        if stored_exercise and stored_exercise.metadata_json
+        else (result.sessionMetadata.model_dump() if result.sessionMetadata else None)
+    )
+    stored_injured_joint_rom = (
+        stored_exercise.injured_joint_rom
+        if stored_exercise and stored_exercise.injured_joint_rom
+        else (result.injuredJointRom.model_dump() if result.injuredJointRom else None)
+    )
+
+    subjective_context, subjective_evidence = _build_subjective_context(stored_metadata)
+    if subjective_evidence:
+        evidence_map["subjective_section"] = subjective_evidence
+
+    injured_joint_context, injured_joint_evidence = _build_injured_joint_context(stored_injured_joint_rom)
+    if injured_joint_evidence:
+        evidence_map["injured_joint_section"] = injured_joint_evidence
 
     if stats["good_rep_count"] == 0:
         data = {
@@ -373,6 +469,12 @@ Biomechanical feature means (from good reps only):
 Session-level:
 - Consistency (1=all reps identical, lower=compensatory variance): {stats['consistency']}
 - Overall rating from mobile app: {result.summary.summary.overallRating}
+
+Stored subjective context:
+{subjective_context}
+
+Stored injured-joint context:
+{injured_joint_context}
 
 Derived scores:
 - ROM score: {stats['rom_score']}/100

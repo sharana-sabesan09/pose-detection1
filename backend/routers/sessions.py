@@ -65,6 +65,9 @@ def _reporter_output_from_artifact(artifact: AgentArtifact | None) -> ReporterOu
         session_highlights=metrics.get("session_highlights", []),
         recommendations=metrics.get("recommendations", []),
         evidence_map=metrics.get("evidence_map", {}),
+        contributing_factors=metrics.get("contributing_factors", []),
+        good_reps=metrics.get("good_reps"),
+        filtered_reps=metrics.get("filtered_reps"),
         reportability=metrics.get("reportability", "unknown"),
         data_coverage=artifact.data_coverage_json or {},
     )

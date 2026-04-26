@@ -118,10 +118,26 @@ async def build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTi
     # Exercise session IDs (to determine source_type).
     # NOTE: visit_id is available on Exercise rows for future use.
     ex_result = await db.execute(
-        select(Exercise.linked_session_id)
+        select(Exercise.linked_session_id, Exercise.injured_joint_rom)
         .where(Exercise.linked_session_id.in_(session_ids))
+        .order_by(Exercise.created_at.desc())
     )
-    exercise_linked_ids = {row[0] for row in ex_result.all() if row[0]}
+    exercise_linked_ids: set[str] = set()
+    exercise_injured_rom_by_session: dict[str, dict[str, float]] = {}
+    for linked_session_id, injured_joint_rom in ex_result.all():
+        if not linked_session_id:
+            continue
+        exercise_linked_ids.add(linked_session_id)
+        if linked_session_id in exercise_injured_rom_by_session:
+            continue
+        if not injured_joint_rom:
+            continue
+        joint_name = injured_joint_rom.get("joint")
+        rom_value = injured_joint_rom.get("rom")
+        if joint_name and rom_value is not None:
+            exercise_injured_rom_by_session[linked_session_id] = {
+                joint_name: float(rom_value),
+            }
 
     facts: list[SessionFact] = []
     for session in sessions:
@@ -148,6 +164,8 @@ async def build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTi
                 if "rom" in stats:
                     injured_joint_rom[joint] = stats["rom"]
             flagged_joints = metrics.get("flagged_joints", [])
+        for joint, rom_value in exercise_injured_rom_by_session.get(sid, {}).items():
+            injured_joint_rom[joint] = rom_value
 
         reinjury_art = artifacts_by_key.get((sid, "reinjury_risk_agent"))
         data_sufficient = False

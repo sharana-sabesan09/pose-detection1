@@ -58,6 +58,9 @@ class ReporterOutput(BaseModel):
     session_highlights: list[str]
     recommendations: list[str]
     evidence_map: dict = {}
+    contributing_factors: list[str] = []
+    good_reps: int | None = None
+    filtered_reps: int | None = None
     reportability: str = "unknown"
     data_coverage: dict = {}
 

@@ -37,6 +37,9 @@ async def get_latest_report(
                 session_highlights=metrics.get("session_highlights", []),
                 recommendations=metrics.get("recommendations", []),
                 evidence_map=metrics.get("evidence_map", {}),
+                contributing_factors=metrics.get("contributing_factors", []),
+                good_reps=metrics.get("good_reps"),
+                filtered_reps=metrics.get("filtered_reps"),
                 reportability=metrics.get("reportability", "unknown"),
                 data_coverage=latest_artifact.data_coverage_json or {},
             )
@@ -60,6 +63,7 @@ async def get_latest_report(
         session_highlights=[],
         recommendations=[],
         evidence_map={},
+        contributing_factors=[],
         reportability="unknown",
         data_coverage={
             "required_fields_present": False,
