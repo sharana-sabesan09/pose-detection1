@@ -64,6 +64,7 @@ import { buildLandmarkCsv } from '../engine/csvLogger';
 import { BACKEND_URL, LOCAL_EXPORTS_URL } from '../constants';
 import {
   buildGhostExerciseInjection,
+  buildGhostRecordingLayoutInjection,
   POSE_HTML,
   POSE_WEBVIEW_KEY,
 } from '../engine/poseHtml';
@@ -185,11 +186,6 @@ export default function SessionScreen() {
     patient && exerciseIdx < patient.curr_program.length
       ? patient.curr_program[exerciseIdx]
       : null;
-  const overlayExercise: ExerciseType | null =
-    sessionState === 'awaiting' || sessionState === 'recording'
-      ? currentExercise
-      : null;
-
   // ── Load profile + patient info on mount ─────────────────────────────────
   useEffect(() => {
     loadStoredProfile().then(async profile => {
@@ -224,14 +220,16 @@ export default function SessionScreen() {
     }, []),
   );
 
+  // Hide calibration ghost until recording; recording start injects exercise + side-panel intro.
   useEffect(() => {
     if (!webViewActive || !webViewReady) return;
+    if (sessionState === 'recording') return;
     try {
-      webViewRef.current?.injectJavaScript(buildGhostExerciseInjection(overlayExercise));
+      webViewRef.current?.injectJavaScript(buildGhostExerciseInjection('walking'));
     } catch {
       /* non-fatal */
     }
-  }, [overlayExercise, webViewActive, webViewReady]);
+  }, [sessionState, webViewActive, webViewReady]);
 
   // ── Countdown timer while recording ───────────────────────────────────────
   useEffect(() => {
@@ -338,6 +336,13 @@ export default function SessionScreen() {
     exerciseStartedAtRef.current = Date.now();
     pipelineRef.current = new ExercisePipeline(currentExercise);
     detectorsRef.current.reset(); // fresh per-exercise live windows
+    try {
+      webViewRef.current?.injectJavaScript(
+        buildGhostRecordingLayoutInjection(currentExercise),
+      );
+    } catch {
+      /* non-fatal */
+    }
     setSessionState('recording');
   }, [currentExercise]);
 

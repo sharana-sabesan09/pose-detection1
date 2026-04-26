@@ -21,7 +21,7 @@ REF_DIRS = [
 ]
 OUT = ROOT / "src/engine/calibrationGhostCycles.generated.ts"
 
-TARGET_FRAMES = 90  # ~3s loop at 30fps — light enough for a bundled string in HTML
+TARGET_FRAMES = 168  # denser keyframes + WebView lerp → smoother ghost (balance vs HTML size)
 
 
 def _read_frames(path: Path) -> list[list[dict[str, float]]]:
