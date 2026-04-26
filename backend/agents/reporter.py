@@ -167,11 +167,15 @@ Output only valid JSON."""
         artifact_json={
             "metrics": {
                 "session_id": session_id,
+                "summary": output.summary,
+                "session_highlights": output.session_highlights,
+                "recommendations": output.recommendations,
                 "fall_risk_score": fall_risk.score,
                 "reinjury_risk_score": reinjury_risk.score,
                 "rom_score": pose.rom_score,
                 "pain_avg": round(pain_avg, 2),
                 "evidence_map": evidence_map,
+                "reportability": "reportable",
             }
         },
         upstream_artifact_ids=upstream,

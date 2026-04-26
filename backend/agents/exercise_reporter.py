@@ -36,6 +36,7 @@ from db.models import Session, SessionScore, Summary
 from rag.retriever import retrieve_clinical_context
 from schemas.exercise import ExerciseResult
 from schemas.session import ExerciseReporterOutput
+from utils.artifacts import write_artifact
 from utils.audit import write_audit
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,7 @@ def _compute_exercise_stats(result: ExerciseResult) -> dict:
             "reinjury_risk_score": 50.0,
             "top_errors": [],
             "consistency": result.summary.summary.consistency,
+            "reportability": "insufficient_quality",
         }
 
     n = len(good_reps)
@@ -177,7 +179,45 @@ def _compute_exercise_stats(result: ExerciseResult) -> dict:
         "reinjury_risk_score": reinjury_risk_score,
         "top_errors": [{"error": k, "rate": round(v, 3)} for k, v in top_errors],
         "consistency": consistency,
+        "reportability": "reportable",
     }
+
+
+def _build_exercise_evidence_map(result: ExerciseResult, stats: dict) -> dict[str, list[str]]:
+    """Build a compact provenance map for report consumers."""
+    evidence_map: dict[str, list[str]] = {
+        "data_quality_section": [
+            f"good_reps={stats['good_rep_count']}/{result.numReps}",
+            f"filtered_reps={stats['filtered_rep_count']}",
+            f"quality_thresholds=confidence>={_MIN_CONFIDENCE},durationMs>={int(_MIN_DURATION_MS)}",
+        ]
+    }
+
+    if stats["good_rep_count"] == 0:
+        evidence_map["recommendations_section"] = [
+            "repeat_capture_with_full_body_visible",
+            "repeat_capture_in_brighter_more_stable_lighting",
+        ]
+        return evidence_map
+
+    movement_quality: list[str] = []
+    rom_ratio_mean = stats["feature_stats"].get("romRatio", {}).get("mean")
+    if rom_ratio_mean is not None:
+        movement_quality.append(f"rom_ratio_mean={rom_ratio_mean}")
+    if stats["pelvic_drop_mean"] is not None:
+        movement_quality.append(f"pelvic_drop_mean={stats['pelvic_drop_mean']}")
+    if stats["sway_norm_mean"] is not None:
+        movement_quality.append(f"sway_norm_mean={stats['sway_norm_mean']}")
+    for top_error in stats["top_errors"][:3]:
+        movement_quality.append(f"{top_error['error']}_rate={top_error['rate']}")
+    if movement_quality:
+        evidence_map["movement_quality_section"] = movement_quality
+
+    evidence_map["recommendations_section"] = [
+        f"{top_error['error']}_rate={top_error['rate']}"
+        for top_error in stats["top_errors"][:3]
+    ] or ["movement_quality_review=manual_follow_up"]
+    return evidence_map
 
 
 async def run_exercise_reporter(
@@ -193,6 +233,97 @@ async def run_exercise_reporter(
     that the progress_agent and reinjury_risk_agent can read longitudinal data.
     """
     stats = _compute_exercise_stats(result)
+    evidence_map = _build_exercise_evidence_map(result, stats)
+    pid = patient_id or "anonymous"
+
+    if stats["good_rep_count"] == 0:
+        data = {
+            "summary": (
+                "Insufficient exercise data quality to generate a grounded clinical report. "
+                "No repetitions met the current confidence and duration thresholds, so this "
+                "recording should be repeated before interpreting risk or range-of-motion trends."
+            ),
+            "session_highlights": [
+                f"0 of {result.numReps} reps met the quality threshold for analysis.",
+                f"{stats['filtered_rep_count']} reps were filtered before scoring.",
+                "No clinical scores were written for this session.",
+            ],
+            "recommendations": [
+                "Repeat the recording with the full body visible for the entire movement.",
+                "Use brighter, steadier camera placement to improve landmark confidence.",
+            ],
+        }
+        output = ExerciseReporterOutput(
+            summary=data["summary"],
+            session_highlights=data["session_highlights"],
+            recommendations=data["recommendations"],
+            fall_risk_score=0.0,
+            reinjury_risk_score=0.0,
+            rom_score=0.0,
+            good_reps=stats["good_rep_count"],
+            filtered_reps=stats["filtered_rep_count"],
+        )
+
+        await hipaa_wrap(
+            content=json.dumps({**data, "evidence_map": evidence_map}),
+            actor="exercise_reporter_agent",
+            patient_id=pid,
+            data_type="exercise_reporter_output",
+            db=db,
+        )
+
+        db.add(Summary(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            agent_name="reporter",
+            content=output.summary,
+            created_at=datetime.utcnow(),
+        ))
+
+        if patient_id:
+            await write_artifact(
+                agent_name="reporter_agent",
+                session_id=session_id,
+                patient_id=patient_id,
+                artifact_kind="reporter_output",
+                artifact_json={
+                    "metrics": {
+                        "session_id": session_id,
+                        "summary": output.summary,
+                        "session_highlights": output.session_highlights,
+                        "recommendations": output.recommendations,
+                        "evidence_map": evidence_map,
+                        "reportability": stats["reportability"],
+                        "good_reps": output.good_reps,
+                        "filtered_reps": output.filtered_reps,
+                        "fall_risk_score": None,
+                        "reinjury_risk_score": None,
+                        "rom_score": None,
+                    }
+                },
+                upstream_artifact_ids=[],
+                data_coverage={
+                    "required_fields_present": False,
+                    "missing_fields": ["usable_reps"],
+                    "notes": [
+                        (
+                            "No repetitions met the exercise quality threshold "
+                            f"(confidence>={_MIN_CONFIDENCE}, durationMs>={int(_MIN_DURATION_MS)})."
+                        )
+                    ],
+                },
+                db=db,
+            )
+
+        await db.flush()
+        await write_audit(
+            "exercise_reporter_agent",
+            "generate_exercise_report",
+            pid,
+            "exercise_report",
+            db,
+        )
+        return output
 
     # RAG query keyed on dominant errors so guidelines are exercise-specific
     error_terms = " ".join(e["error"] for e in stats["top_errors"]) or "squat biomechanics"
@@ -300,10 +431,8 @@ Output only valid JSON."""
         filtered_reps=stats["filtered_rep_count"],
     )
 
-    pid = patient_id or "anonymous"
-
     await hipaa_wrap(
-        content=json.dumps(data),
+        content=json.dumps({**data, "evidence_map": evidence_map}),
         actor="exercise_reporter_agent",
         patient_id=pid,
         data_type="exercise_reporter_output",
@@ -337,6 +466,36 @@ Output only valid JSON."""
             rom_score=output.rom_score,
             created_at=datetime.utcnow(),
         ))
+
+    if patient_id:
+        await write_artifact(
+            agent_name="reporter_agent",
+            session_id=session_id,
+            patient_id=patient_id,
+            artifact_kind="reporter_output",
+            artifact_json={
+                "metrics": {
+                    "session_id": session_id,
+                    "summary": output.summary,
+                    "session_highlights": output.session_highlights,
+                    "recommendations": output.recommendations,
+                    "evidence_map": evidence_map,
+                    "reportability": stats["reportability"],
+                    "good_reps": output.good_reps,
+                    "filtered_reps": output.filtered_reps,
+                    "fall_risk_score": output.fall_risk_score,
+                    "reinjury_risk_score": output.reinjury_risk_score,
+                    "rom_score": output.rom_score,
+                }
+            },
+            upstream_artifact_ids=[],
+            data_coverage={
+                "required_fields_present": True,
+                "missing_fields": [],
+                "notes": [],
+            },
+            db=db,
+        )
 
     await db.flush()
     await write_audit(

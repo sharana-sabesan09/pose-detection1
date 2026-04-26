@@ -70,8 +70,8 @@ export default function ReturnScreen({ navigation }: Props) {
           <View style={styles.stack}>
             {[
               { id: 'treatment', label: 'Treatment', sub: 'Standard rehab session' },
-              { id: 'assessment', label: 'Assessment', sub: 'Formal measurement / baseline' },
-              { id: 'home_exercise_check', label: 'Home check-in', sub: 'Solo, limited camera data' },
+              { id: 'assessment', label: 'Assessment', sub: 'Formal measurement or baseline' },
+              { id: 'home_exercise_check', label: 'Home check-in', sub: 'Solo session with limited camera data' },
             ].map(option => (
               <Pressable
                 key={option.id}
@@ -95,7 +95,7 @@ export default function ReturnScreen({ navigation }: Props) {
                       strokeWidth={1.6}
                     >
                       {data.session_type === option.id ? (
-                        <Text style={styles.checkGlyph}>✓</Text>
+                        <Text style={styles.checkGlyph}>x</Text>
                       ) : null}
                     </SketchCircle>
                     <View>
@@ -161,11 +161,11 @@ export default function ReturnScreen({ navigation }: Props) {
         <ScreenHeader
           onBack={() => setStep(0)}
           title="Where it hurt"
-          subtitle="0 = none - 10 = worst"
+          subtitle="0 = none, 10 = worst"
         />
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <Text style={styles.bodyCopy}>
-            Skip a joint if there was no pain there at all.
+            Skip a joint if there was no pain there.
           </Text>
           {[
             { id: 'knee_flexion', label: 'Knee' },
@@ -195,11 +195,11 @@ export default function ReturnScreen({ navigation }: Props) {
       <ScreenHeader
         onBack={() => setStep(1)}
         title="Notes"
-        subtitle="anything to flag for Dr. Adler?"
+        subtitle="anything to note about the session?"
       />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.fieldBlock}>
-          <FieldLabel>Today's plan (from clinician)</FieldLabel>
+          <FieldLabel>Today's plan</FieldLabel>
           <SketchInput
             multiline
             placeholder="e.g. 3x10 step-ups, 2x30s side plank, no impact"
@@ -230,13 +230,12 @@ export default function ReturnScreen({ navigation }: Props) {
               : data.session_type === 'assessment'
                 ? 'Assessment'
                 : 'Home check'}{' '}
-            - feeling {data.overall_feel || '-'} - pain peak{' '}
-            {Math.max(...Object.values(data.pain))}/10
+            - feeling {data.overall_feel || '-'} - pain peak {Math.max(...Object.values(data.pain))}/10
           </Text>
         </SketchBox>
 
-        <InkButton label="Save & sync ✓" onPress={finish} style={styles.fullButton} />
-        <Text style={styles.footerText}>your therapist sees this within the hour</Text>
+        <InkButton label="Save check-in" onPress={finish} style={styles.fullButton} />
+        <Text style={styles.footerText}>saved on this device</Text>
       </ScrollView>
     </View>
   );

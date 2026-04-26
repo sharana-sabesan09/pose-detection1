@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from db.session import get_db
-from db.models import Summary, Session as SessionModel
+from db.models import AgentArtifact, Summary, Session as SessionModel
 from schemas.session import ReporterOutput, ProgressOutput
 from agents.progress import run_progress
 from routers.auth import require_jwt
@@ -16,6 +16,29 @@ async def get_latest_report(
     db: AsyncSession = Depends(get_db),
     _user=Depends(require_jwt),
 ):
+    artifact_result = await db.execute(
+        select(AgentArtifact)
+        .join(SessionModel, AgentArtifact.session_id == SessionModel.id)
+        .where(
+            AgentArtifact.agent_name == "reporter_agent",
+            AgentArtifact.artifact_kind == "reporter_output",
+            SessionModel.patient_id == patient_id,
+        )
+        .order_by(AgentArtifact.created_at.desc())
+        .limit(1)
+    )
+    latest_artifact = artifact_result.scalars().first()
+    if latest_artifact:
+        metrics = latest_artifact.artifact_json.get("metrics", {})
+        summary = metrics.get("summary")
+        if summary:
+            return ReporterOutput(
+                summary=summary,
+                session_highlights=metrics.get("session_highlights", []),
+                recommendations=metrics.get("recommendations", []),
+                evidence_map=metrics.get("evidence_map", {}),
+            )
+
     result = await db.execute(
         select(Summary)
         .join(SessionModel, Summary.session_id == SessionModel.id)
@@ -34,6 +57,7 @@ async def get_latest_report(
         summary=summary.content,
         session_highlights=[],
         recommendations=[],
+        evidence_map={},
     )
 
 
@@ -43,4 +67,6 @@ async def get_progress_report(
     db: AsyncSession = Depends(get_db),
     _user=Depends(require_jwt),
 ):
-    return await run_progress(patient_id, db)
+    output = await run_progress(patient_id, db)
+    await db.commit()
+    return output

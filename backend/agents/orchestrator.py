@@ -117,7 +117,7 @@ async def run_exercise_pipeline(
 
     async with AsyncSessionLocal() as db:
         try:
-            reporter_output = await run_exercise_reporter(result, session_id, pid, db)
+            reporter_output = await run_exercise_reporter(result, session_id, patient_id, db)
             results["exercise_reporter"] = reporter_output.model_dump()
         except Exception as e:
             logger.error("exercise_reporter agent failed: %s", e)
