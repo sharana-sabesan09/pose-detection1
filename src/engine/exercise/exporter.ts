@@ -270,6 +270,7 @@ async function getBackendToken(baseUrl: string, timeoutMs: number): Promise<stri
 export async function postSessionToBackend(
   baseUrl: string | null | undefined,
   payload: SessionExportPayload,
+  framesCsv?: string,
   timeoutMs = 15000,
 ): Promise<BackendExportResult> {
   if (!baseUrl) return { ok: false, error: 'no backend URL configured' };
@@ -298,6 +299,7 @@ export async function postSessionToBackend(
         patientId: payload.patientId ?? null,
         repsCsv: payload.repsCsv,
         frameFeaturesCsv: payload.frameFeaturesCsv,
+        framesCsv: framesCsv ?? null,
       }),
       signal: controller.signal,
     });

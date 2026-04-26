@@ -8,6 +8,7 @@ class IntakeRequest(Model):
     pt_plan: str
     pain_scores: dict
     user_input: str
+    session_type: str = "treatment"
 
 
 class IntakeResponse(Model):
@@ -15,6 +16,12 @@ class IntakeResponse(Model):
     normalized_pain_scores: dict
     target_joints: list
     session_goals: list
+    session_type: str = "treatment"
+    injured_joints: list = []
+    injured_side: str = "unknown"
+    rehab_phase: str = "unknown"
+    contraindications: list = []
+    data_confidence: str = "missing"
     error: Optional[str] = None
 
 
@@ -28,6 +35,8 @@ class PoseResponse(Model):
     rom_score: float
     joint_stats: dict
     flagged_joints: list
+    frame_count: int = 0
+    joint_coverage: dict = {}
     error: Optional[str] = None
 
 
@@ -44,6 +53,8 @@ class FallRiskResponse(Model):
     risk_level: str
     reasoning: str
     contributing_factors: list
+    rag_used: bool = False
+    rag_sources: list = []
     error: Optional[str] = None
 
 
@@ -58,6 +69,9 @@ class ReinjuryRiskResponse(Model):
     score: float
     trend: str
     reasoning: str
+    sessions_used: int = 0
+    data_sufficient: bool = False
+    injured_joint_trend: dict = {}
     error: Optional[str] = None
 
 
@@ -75,6 +89,7 @@ class ReporterResponse(Model):
     summary: str
     session_highlights: list
     recommendations: list
+    evidence_map: dict = {}
     error: Optional[str] = None
 
 
@@ -88,4 +103,22 @@ class ProgressResponse(Model):
     overall_trend: str
     milestones_reached: list
     next_goals: list
+    evidence_citations: dict = {}
+    error: Optional[str] = None
+
+
+class PatientAdviceRequestMessage(Model):
+    request_id: str
+    patient_id: str
+    question: str
+
+
+class PatientAdviceResponseMessage(Model):
+    request_id: str
+    patient_id: str
+    answer: str
+    safety_level: str
+    urgent_flags: list[str]
+    next_steps: list[str]
+    disclaimer: str
     error: Optional[str] = None

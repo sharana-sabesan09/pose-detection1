@@ -11,6 +11,13 @@ class PatientMetadata(BaseModel):
     weightKg: float
     bmi: float
     demographicRiskScore: float
+    # Clinical fields — optional, added by front-end registration/edit screen
+    injured_joints: list[str] = []
+    injured_side: str = "unknown"       # "left" | "right" | "bilateral" | "unknown"
+    rehab_phase: str = "unknown"        # "acute" | "sub-acute" | "functional" | "return-to-sport"
+    diagnosis: str = ""
+    contraindications: list[str] = []
+    restrictions: list[str] = []
 
 
 class PatientUpsertRequest(PatientMetadata):

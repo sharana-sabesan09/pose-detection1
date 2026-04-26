@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional
+from schemas.voice import SessionMetadata
 
 
 class RepTiming(BaseModel):
@@ -80,6 +81,8 @@ class ExerciseSessionResult(BaseModel):
     # row so the exact uploaded CSVs are queryable later.
     repsCsv: Optional[str] = None
     frameFeaturesCsv: Optional[str] = None
+    framesCsv: Optional[str] = None
+    sessionMetadata: Optional[SessionMetadata] = None
 
 
 class ExerciseSessionResponse(BaseModel):

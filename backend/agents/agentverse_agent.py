@@ -1,4 +1,5 @@
 import logging
+import uuid
 from uagents import Agent, Context, Model
 from config import settings
 from agents.messages import (
@@ -8,6 +9,7 @@ from agents.messages import (
     ReinjuryRiskRequest, ReinjuryRiskResponse,
     ReporterRequest, ReporterResponse,
     ProgressRequest, ProgressResponse,
+    PatientAdviceRequestMessage, PatientAdviceResponseMessage,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,10 +28,27 @@ class SessionResponseMessage(Model):
     status: str
 
 
+class PatientAdviceQueryMessage(Model):
+    request_id: str | None = None
+    patient_id: str
+    question: str
+
+
+class PatientAdviceResultMessage(Model):
+    request_id: str
+    answer: str
+    safety_level: str
+    urgent_flags: list[str]
+    next_steps: list[str]
+    disclaimer: str
+    status: str
+
+
 # Per-session pipeline state, keyed by session_id
 _sessions: dict[str, dict] = {}
 # Progress queries keyed by patient_id → original sender
 _progress_pending: dict[str, str] = {}
+_advice_pending: dict[str, str] = {}
 
 physio_agent = Agent(
     name="physio-orchestrator",
@@ -58,6 +77,19 @@ async def _on_query(ctx: Context, sender: str, msg: SessionQueryMessage):
             pain_scores={},
             user_input="",
         ))
+
+
+@physio_agent.on_message(model=PatientAdviceQueryMessage)
+async def _on_patient_advice_query(ctx: Context, sender: str, msg: PatientAdviceQueryMessage):
+    from agents.patient_advisor import patient_advisor_agent
+
+    request_id = msg.request_id or str(uuid.uuid4())
+    _advice_pending[request_id] = sender
+    await ctx.send(patient_advisor_agent.address, PatientAdviceRequestMessage(
+        request_id=request_id,
+        patient_id=msg.patient_id,
+        question=msg.question,
+    ))
 
 
 @physio_agent.on_message(model=IntakeResponse)
@@ -231,6 +263,23 @@ async def _on_progress(ctx: Context, sender: str, msg: ProgressResponse):
             scores={"overall_trend": msg.overall_trend},
             status="ok" if not msg.error else f"error: {msg.error}",
         ))
+
+
+@physio_agent.on_message(model=PatientAdviceResponseMessage)
+async def _on_patient_advice(ctx: Context, sender: str, msg: PatientAdviceResponseMessage):
+    original_sender = _advice_pending.pop(msg.request_id, None)
+    if not original_sender:
+        return
+
+    await ctx.send(original_sender, PatientAdviceResultMessage(
+        request_id=msg.request_id,
+        answer=msg.answer,
+        safety_level=msg.safety_level,
+        urgent_flags=msg.urgent_flags,
+        next_steps=msg.next_steps,
+        disclaimer=msg.disclaimer,
+        status="ok" if not msg.error else f"error: {msg.error}",
+    ))
 
 
 async def _finish(ctx: Context, session_id: str) -> None:
