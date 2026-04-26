@@ -96,6 +96,8 @@ export const POSE_HTML = `
 
     // ── Live ghost trainer (looped reference pose from bundled calibration cycles)
     const GHOST_CYCLES = ${JSON.stringify(GHOST_CYCLE_BY_EXERCISE)};
+    /** ~4–5 keyframes/s through the subsampled cycle ≈ human-tempo demo (was 33ms ≈ 30/s). */
+    const GHOST_MS_PER_KEYFRAME = 220;
     const GHOST_CONNECTIONS = [
       [11,12],[11,23],[12,24],[23,24],
       [23,25],[25,27],[27,29],[24,26],[26,28],[28,30],
@@ -122,6 +124,27 @@ export const POSE_HTML = `
       };
     }
 
+    /** Screen pixel point from normalised ghost landmark. */
+    function ghostPx(lm, vw, vh, scale, ox, oy, W, H) {
+      const a = alignGhostLm(lm, vw, vh, scale, ox, oy, W, H);
+      return { x: a.x * W, y: a.y * H, v: a.v };
+    }
+
+    /** Filled limb “tube” between two screen points (silhouette, not stick lines). */
+    function fillLimbCapsule(ctx, ax, ay, bx, by, halfW) {
+      const dx = bx - ax, dy = by - ay;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = (-dy / len) * halfW;
+      const ny = (dx / len) * halfW;
+      ctx.beginPath();
+      ctx.moveTo(ax + nx, ay + ny);
+      ctx.lineTo(ax - nx, ay - ny);
+      ctx.lineTo(bx - nx, by - ny);
+      ctx.lineTo(bx + nx, by + ny);
+      ctx.closePath();
+      ctx.fill();
+    }
+
     function drawGhost(W, H) {
       const cycle = GHOST_CYCLES[ghostExercise];
       if (!cycle || !cycle.length) return;
@@ -133,28 +156,38 @@ export const POSE_HTML = `
 
       const frame = cycle[ghostRefIdx % cycle.length];
 
+      const halfW = Math.max(12, Math.min(W, H) * 0.02);
+      const jointR = halfW * 1.15;
+
       ctx.save();
-      ctx.globalAlpha = 0.42;
-      ctx.strokeStyle = '#3cdc3c';
-      ctx.lineWidth = 2.2;
-      ctx.lineCap = 'round';
-      ctx.fillStyle = '#3cdc3c';
+      ctx.globalAlpha = 0.48;
+      ctx.fillStyle = '#2ea84a';
+
       for (const [a, b] of GHOST_CONNECTIONS) {
-        const la = alignGhostLm(frame[a], vw, vh, scale, offsetX, offsetY, W, H);
-        const lb = alignGhostLm(frame[b], vw, vh, scale, offsetX, offsetY, W, H);
-        if (la.v < 0.2 || lb.v < 0.2) continue;
-        ctx.beginPath();
-        ctx.moveTo(la.x * W, la.y * H);
-        ctx.lineTo(lb.x * W, lb.y * H);
-        ctx.stroke();
+        const pa = ghostPx(frame[a], vw, vh, scale, offsetX, offsetY, W, H);
+        const pb = ghostPx(frame[b], vw, vh, scale, offsetX, offsetY, W, H);
+        if (pa.v < 0.2 || pb.v < 0.2) continue;
+        fillLimbCapsule(ctx, pa.x, pa.y, pb.x, pb.y, halfW);
       }
-      for (const lm of frame) {
-        const p = alignGhostLm(lm, vw, vh, scale, offsetX, offsetY, W, H);
+
+      // Rounded joints so capsules read as one soft silhouette
+      const jointIdx = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+      for (const i of jointIdx) {
+        const p = ghostPx(frame[i], vw, vh, scale, offsetX, offsetY, W, H);
         if (p.v < 0.2) continue;
         ctx.beginPath();
-        ctx.arc(p.x * W, p.y * H, 4, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, jointR, 0, Math.PI * 2);
         ctx.fill();
       }
+
+      // Light head blob (nose) so the figure reads as a person, not headless
+      const nose = ghostPx(frame[0], vw, vh, scale, offsetX, offsetY, W, H);
+      if (nose.v >= 0.2) {
+        ctx.beginPath();
+        ctx.arc(nose.x, nose.y, halfW * 1.35, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       ctx.restore();
     }
 
@@ -187,9 +220,9 @@ export const POSE_HTML = `
       if (video.currentTime === lastTs) return;
       lastTs = video.currentTime;
 
-      // Advance reference frame at ~30 fps (one step per ~33ms of video time)
+      // Advance ghost keyframes slowly (see GHOST_MS_PER_KEYFRAME)
       const now = performance.now();
-      if (now - lastRefTs >= 33) {
+      if (now - lastRefTs >= GHOST_MS_PER_KEYFRAME) {
         const cycle = GHOST_CYCLES[ghostExercise];
         const n = cycle && cycle.length ? cycle.length : 1;
         ghostRefIdx = (ghostRefIdx + 1) % n;
