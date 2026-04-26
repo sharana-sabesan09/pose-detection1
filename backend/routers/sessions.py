@@ -1,11 +1,11 @@
 import asyncio
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from db.session import get_db
-from db.models import Session, PoseFrame, ExerciseSession, RepAnalysis, Patient
+from db.models import Session, PoseFrame, ExerciseSession, RepAnalysis, Patient, ExerciseSessionArtifact
 from schemas.session import IntakeInput, ReporterOutput
 from schemas.report import SessionStartRequest, SessionStartResponse, FrameRequest
 from schemas.exercise import ExerciseSessionResult, ExerciseSessionResponse
@@ -16,6 +16,9 @@ from utils.frame_csv import parse_frame_features_csv
 from utils.landmarks_csv import parse_landmarks_csv
 from fastapi.responses import PlainTextResponse
 from utils.voice_metadata import build_session_metadata_from_voice
+from fastapi.responses import StreamingResponse
+from schemas.artifact import ExerciseSessionArtifactResponse
+from datetime import timezone
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -272,3 +275,101 @@ async def latest_landmark_frames_csv(
     if not frames:
         raise HTTPException(status_code=404, detail="no landmark frames stored for latest session")
     return _build_landmarks_csv_from_frames(frames, mode=exercise)
+
+
+@router.post(
+    "/{exercise_session_id}/artifacts",
+    response_model=ExerciseSessionArtifactResponse,
+    status_code=201,
+)
+async def upload_exercise_session_artifact(
+    exercise_session_id: str,
+    artifactType: str = Form(...),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_jwt),
+):
+    result = await db.execute(select(ExerciseSession).where(ExerciseSession.id == exercise_session_id))
+    ex = result.scalars().first()
+    if not ex:
+        raise HTTPException(status_code=404, detail="exercise session not found")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty upload")
+    content_type = file.content_type or "application/octet-stream"
+
+    art = ExerciseSessionArtifact(
+        id=str(uuid.uuid4()),
+        exercise_session_id=exercise_session_id,
+        artifact_type=artifactType,
+        content_type=content_type,
+        bytes=content,
+        size_bytes=len(content),
+    )
+    db.add(art)
+    await db.commit()
+
+    return ExerciseSessionArtifactResponse(
+        id=art.id,
+        exerciseSessionId=art.exercise_session_id,
+        artifactType=art.artifact_type,
+        contentType=art.content_type,
+        sizeBytes=art.size_bytes,
+        createdAt=art.created_at.replace(tzinfo=timezone.utc).isoformat(),
+    )
+
+
+@router.get("/{exercise_session_id}/artifacts/{artifact_id}")
+async def download_exercise_session_artifact(
+    exercise_session_id: str,
+    artifact_id: str,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_jwt),
+):
+    result = await db.execute(
+        select(ExerciseSessionArtifact)
+        .where(ExerciseSessionArtifact.id == artifact_id)
+        .where(ExerciseSessionArtifact.exercise_session_id == exercise_session_id)
+    )
+    art = result.scalars().first()
+    if not art:
+        raise HTTPException(status_code=404, detail="artifact not found")
+
+    headers = {"Content-Length": str(art.size_bytes)}
+    return StreamingResponse(
+        iter([art.bytes]),
+        media_type=art.content_type,
+        headers=headers,
+    )
+
+
+@router.get("/latest/overlay.mp4")
+async def latest_overlay_mp4(
+    exercise: str,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_jwt),
+):
+    result = await db.execute(
+        select(ExerciseSession)
+        .where(ExerciseSession.exercise == exercise)
+        .order_by(ExerciseSession.created_at.desc())
+        .limit(1)
+    )
+    ex = result.scalars().first()
+    if not ex:
+        raise HTTPException(status_code=404, detail="no stored exercise session")
+
+    art_result = await db.execute(
+        select(ExerciseSessionArtifact)
+        .where(ExerciseSessionArtifact.exercise_session_id == ex.id)
+        .where(ExerciseSessionArtifact.artifact_type == "overlay_mp4")
+        .order_by(ExerciseSessionArtifact.created_at.desc())
+        .limit(1)
+    )
+    art = art_result.scalars().first()
+    if not art:
+        raise HTTPException(status_code=404, detail="no overlay artifact stored for latest session")
+
+    headers = {"Content-Length": str(art.size_bytes)}
+    return StreamingResponse(iter([art.bytes]), media_type=art.content_type, headers=headers)

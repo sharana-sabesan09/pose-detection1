@@ -1,6 +1,18 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Float, Integer, ForeignKey, Text, DateTime, JSON, Boolean, Index
+from sqlalchemy import (
+    Column,
+    String,
+    Float,
+    Integer,
+    ForeignKey,
+    Text,
+    DateTime,
+    JSON,
+    Boolean,
+    Index,
+    LargeBinary,
+)
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 # Use plain String(36) for UUIDs — works on both SQLite and PostgreSQL.
@@ -122,6 +134,29 @@ class ExerciseSession(Base):
     patient = relationship("Patient", foreign_keys=[patient_id])
     linked_session = relationship("Session", foreign_keys=[linked_session_id])
     reps = relationship("RepAnalysis", back_populates="exercise_session", cascade="all, delete-orphan")
+    artifacts = relationship(
+        "ExerciseSessionArtifact",
+        back_populates="exercise_session",
+        cascade="all, delete-orphan",
+    )
+
+
+class ExerciseSessionArtifact(Base):
+    __tablename__ = "exercise_session_artifacts"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    exercise_session_id = Column(
+        String(36),
+        ForeignKey("exercise_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    artifact_type = Column(String(64), nullable=False)  # e.g. "overlay_mp4"
+    content_type = Column(String(128), nullable=False)  # e.g. "video/mp4"
+    bytes = Column(LargeBinary, nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    exercise_session = relationship("ExerciseSession", back_populates="artifacts")
 
 
 class RepAnalysis(Base):
