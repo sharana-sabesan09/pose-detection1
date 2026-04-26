@@ -50,7 +50,7 @@ async function getBackendToken(baseUrl: string, timeoutMs = 8000): Promise<strin
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!data?.access_token) throw new Error('token response missing access_token');
-    cachedAccessToken = data.access_token;
+    cachedAccessToken = data.access_token as string;
     return cachedAccessToken;
   } finally {
     clearTimeout(timer);

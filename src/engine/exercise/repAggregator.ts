@@ -1,9 +1,10 @@
 /**
  * src/engine/exercise/repAggregator.ts — PER-REP FEATURE AGGREGATION (POST-HOC)
  *
- * Pure function — no class, no lifecycle methods.
- * Receives a slice of FrameFeatures already bounded by detectRepRanges
- * and returns one finalised RepFeatures.
+ * Pure function. Receives a frame slice bounded by detectRepRanges and an
+ * exercise plugin, and returns one finalised RepFeatures.
+ *
+ * The plugin decides errors + score — no exercise-specific logic lives here.
  */
 
 import {
@@ -13,14 +14,15 @@ import {
   RepFeatures,
   Side,
 } from './types';
-import { computeErrors, computeScore } from './errors';
-import { updateWindowStats }           from './windowStats';
-import { RepRange }                    from './repDetector';
+import { updateWindowStats }    from './windowStats';
+import { RepRange }             from './repDetector';
+import { ExercisePlugin }       from './exercises/plugin';
 
 export function aggregateRepFromFrames(
-  frames: FrameFeatures[],
-  repId:  number,
-  range:  RepRange,
+  frames:  FrameFeatures[],
+  repId:   number,
+  range:   RepRange,
+  plugin:  ExercisePlugin,
 ): RepFeatures | null {
   if (frames.length < 3) return null;
 
@@ -41,9 +43,12 @@ export function aggregateRepFromFrames(
   let hipAdductionPeak = -Infinity;
   let kneeOffsetPeak   = -Infinity;
   let pelvicShiftPeak  = 0;
+  let maxMidHipY       = -Infinity;
   let confSum          = 0;
 
-  const startMidHipX = startFrame.midHipX;
+  const startMidHipX  = startFrame.midHipX;
+  const TAP_THRESHOLD = 0.05; // screen-fraction drop from start = heel near floor
+  let swingHeelContactFrames = 0;
 
   for (const f of frames) {
     if (f.kneeFlexion  > kneeFlexionDeg)   kneeFlexionDeg   = f.kneeFlexion;
@@ -53,8 +58,16 @@ export function aggregateRepFromFrames(
     if (f.pelvicDrop   > pelvicDropPeak)   pelvicDropPeak   = f.pelvicDrop;
     if (f.hipAdduction > hipAdductionPeak) hipAdductionPeak = f.hipAdduction;
     if (f.kneeOffset   > kneeOffsetPeak)   kneeOffsetPeak   = f.kneeOffset;
+    if (f.midHipY      > maxMidHipY)       maxMidHipY       = f.midHipY;
     const shift = Math.abs(f.midHipX - startMidHipX);
     if (shift          > pelvicShiftPeak)  pelvicShiftPeak  = shift;
+
+    // Swing heel approaching the floor (high swingHeelY = lower on screen).
+    // Compare against the starting swing heel Y — if it drops significantly, count it.
+    if (f.swingHeelY > 0 && f.swingHeelY >= (startFrame.swingHeelY + TAP_THRESHOLD)) {
+      swingHeelContactFrames++;
+    }
+
     confSum += f.confidence;
   }
 
@@ -62,20 +75,22 @@ export function aggregateRepFromFrames(
 
   const features: RepFeatureValues = {
     kneeFlexionDeg,
-    romRatio:         kneeFlexionDeg / EXPECTED_ROM_DEG,
+    romRatio:               kneeFlexionDeg / EXPECTED_ROM_DEG,
     fppaPeak,
-    fppaAtDepth:      bottomFrame.fppa,
+    fppaAtDepth:            bottomFrame.fppa,
     trunkLeanPeak,
     trunkFlexPeak,
     pelvicDropPeak,
     pelvicShiftPeak,
     hipAdductionPeak,
     kneeOffsetPeak,
-    swayNorm:         ws.swayNorm,
-    smoothness:       ws.smoothness,
+    swayNorm:               ws.swayNorm,
+    smoothness:             ws.smoothness,
+    pelvisVertDisplacement: Math.max(0, maxMidHipY - startFrame.midHipY),
+    swingHeelContactFrames,
   };
 
-  const errors = computeErrors(features);
+  const { errors, score } = plugin(features);
 
   return {
     repId,
@@ -88,7 +103,7 @@ export function aggregateRepFromFrames(
     },
     features,
     errors,
-    score:      computeScore(errors),
+    score,
     confidence: confSum / frames.length,
   };
 }

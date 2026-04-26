@@ -68,6 +68,9 @@ export interface FrameFeatures {
   // ── derived ───────────────────────────────────────────────────────────────
   velocityKneeFlex: number; // deg / second; 0 if no previous frame
 
+  // ── unilateral ────────────────────────────────────────────────────────────
+  swingHeelY: number; // raw screen-fraction y of the non-dominant heel (larger = lower on screen)
+
   // ── meta ──────────────────────────────────────────────────────────────────
   dominantSide:   Side;
   confidence:     number;   // mean visibility of the joints used (0–1)
@@ -124,6 +127,10 @@ export interface RepFeatureValues {
 
   swayNorm:    number;
   smoothness:  number;
+
+  // ── step-down additions ───────────────────────────────────────────────────
+  pelvisVertDisplacement: number; // screen-fraction drop of hip midpoint (larger = deeper)
+  swingHeelContactFrames: number; // frames where swing heel is near floor (heel tap proxy)
 }
 
 export interface RepErrors {
@@ -183,7 +190,7 @@ export interface SessionSummary {
  * All values in degrees except where noted. Tweak in tests if needed.
  */
 export const ERROR_THRESHOLDS = {
-  KNEE_VALGUS_FPPA_DEG:     8,    // FPPA peak > this → valgus collapse
+  KNEE_VALGUS_FPPA_DEG:     7,    // FPPA peak > this → valgus collapse (AAOS-aligned)
   TRUNK_LEAN_DEG:           10,   // peak frontal lean > this → fail
   TRUNK_FLEX_DEG:           45,   // peak forward lean > this → fail
   PELVIC_DROP_DEG:          5,    // peak Trendelenburg > this → fail
@@ -210,5 +217,5 @@ export const REP_THRESHOLDS = {
   MIN_EVENT_FRAMES:      3,
 } as const;
 
-/** Expected full ROM for romRatio normalisation (deep squat ≈ 120°). */
-export const EXPECTED_ROM_DEG = 120;
+/** Expected full ROM for romRatio normalisation. AAOS norm for step-down = 135°. */
+export const EXPECTED_ROM_DEG = 135;
