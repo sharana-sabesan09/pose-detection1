@@ -96,8 +96,14 @@ export const POSE_HTML = `
 
     // ── Live ghost trainer (looped reference pose from bundled calibration cycles)
     const GHOST_CYCLES = ${JSON.stringify(GHOST_CYCLE_BY_EXERCISE)};
-    /** ~4–5 keyframes/s through the subsampled cycle ≈ human-tempo demo (was 33ms ≈ 30/s). */
-    const GHOST_MS_PER_KEYFRAME = 220;
+    /** Keyframe cadence through the subsampled cycle (higher = easier to follow). */
+    const GHOST_MS_PER_KEYFRAME = 285;
+    /** Shift ghost horizontally (fraction of width) so user and silhouette overlap less. */
+    const GHOST_OFFSET_X_FRAC = 0.072;
+    /** rgba alpha: limbs more see-through, joints/head slightly more solid (wider translucency range). */
+    const GHOST_LIMB_ALPHA = 0.22;
+    const GHOST_JOINT_ALPHA = 0.58;
+    const GHOST_HEAD_ALPHA = 0.5;
     const GHOST_CONNECTIONS = [
       [11,12],[11,23],[12,24],[23,24],
       [23,25],[25,27],[27,29],[24,26],[26,28],[28,30],
@@ -160,18 +166,19 @@ export const POSE_HTML = `
       const jointR = halfW * 1.15;
 
       ctx.save();
-      ctx.globalAlpha = 0.48;
-      ctx.fillStyle = '#2ea84a';
+      ctx.translate(W * GHOST_OFFSET_X_FRAC, 0);
 
       for (const [a, b] of GHOST_CONNECTIONS) {
         const pa = ghostPx(frame[a], vw, vh, scale, offsetX, offsetY, W, H);
         const pb = ghostPx(frame[b], vw, vh, scale, offsetX, offsetY, W, H);
         if (pa.v < 0.2 || pb.v < 0.2) continue;
+        ctx.fillStyle = 'rgba(46,168,74,' + GHOST_LIMB_ALPHA + ')';
         fillLimbCapsule(ctx, pa.x, pa.y, pb.x, pb.y, halfW);
       }
 
       // Rounded joints so capsules read as one soft silhouette
       const jointIdx = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+      ctx.fillStyle = 'rgba(46,168,74,' + GHOST_JOINT_ALPHA + ')';
       for (const i of jointIdx) {
         const p = ghostPx(frame[i], vw, vh, scale, offsetX, offsetY, W, H);
         if (p.v < 0.2) continue;
@@ -183,6 +190,7 @@ export const POSE_HTML = `
       // Light head blob (nose) so the figure reads as a person, not headless
       const nose = ghostPx(frame[0], vw, vh, scale, offsetX, offsetY, W, H);
       if (nose.v >= 0.2) {
+        ctx.fillStyle = 'rgba(46,168,74,' + GHOST_HEAD_ALPHA + ')';
         ctx.beginPath();
         ctx.arc(nose.x, nose.y, halfW * 1.35, 0, Math.PI * 2);
         ctx.fill();
