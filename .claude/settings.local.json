@@ -23,9 +23,11 @@
       "Bash(echo \"exit: $?\")",
       "WebSearch",
       "WebFetch(domain:discuss.ai.google.dev)",
-
-      "Bash(uv run *)"
-
+      "Bash(uv run *)",
+      "Bash(unzip -o Sentinel-handoff.zip -d /tmp/sentinel-handoff)",
+      "Bash(npx tsc *)",
+      "Bash(xxd)",
+      "Bash(python3 *)"
     ]
   }
 }

@@ -994,7 +994,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 18,
     paddingVertical: 14,
-    borderRadius: 18,
   },
   inkButtonText: {
     fontFamily: FONTS.handBold,

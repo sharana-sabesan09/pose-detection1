@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   Pressable,
   ScrollView,
   StyleProp,
@@ -9,6 +10,7 @@ import {
   View,
   ViewStyle,
 } from 'react-native';
+import Voice from '@react-native-voice/voice';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -592,110 +594,11 @@ export default function SentinelOnboardingScreen({ navigation, route }: Props) {
             any limits. All optional.
           </Text>
 
-          <Pressable onPress={() => setTalkOpen(open => !open)}>
-            <SketchBox
-              seed={170}
-              style={styles.talkCta}
-              fill="rgba(236, 213, 201, 0.75)"
-              stroke={COLORS.accentDeep}
-              strokeWidth={2}
-              double
-            >
-              <View style={styles.recordRow}>
-                <SketchCircle
-                  size={52}
-                  seed={171}
-                  fill="rgba(255,245,239,0.85)"
-                  stroke={COLORS.accentDeep}
-                >
-                  <TalkIcon />
-                </SketchCircle>
-                <View style={styles.flex}>
-                  <Text style={styles.talkTitle}>Talk about it</Text>
-                  <Text style={[styles.cardSub, { color: COLORS.accentDeep }]}>
-                    diagnosis · avoid · limits - together
-                  </Text>
-                </View>
-                <Text style={styles.chevron}>{talkOpen ? '›' : '〉'}</Text>
-              </View>
-            </SketchBox>
-          </Pressable>
-
-          {talkOpen ? (
-            <View style={styles.talkDetails}>
-              <View>
-                <Text style={styles.microLabel}>① DIAGNOSIS</Text>
-                <SketchInput
-                  multiline
-                  placeholder="e.g. ACL reconstruction (left)"
-                  value={draft.diagnosis}
-                  onChangeText={diagnosis => setDraftPatch({ diagnosis })}
-                />
-                <View style={styles.tagWrap}>
-                  {DIAGNOSIS_SUGGEST.slice(0, 5).map(item => (
-                    <TagPill
-                      key={item}
-                      label={item}
-                      onPress={() => setDraftPatch({ diagnosis: item })}
-                    />
-                  ))}
-                </View>
-              </View>
-
-              <View>
-                <Text style={styles.microLabel}>② TO AVOID</Text>
-                <View style={styles.tagWrap}>
-                  {COMMON_CONTRAS.map(item => {
-                    const active = draft.contraindications.includes(item);
-                    return (
-                      <TagPill
-                        key={item}
-                        label={`${active ? '⚠ ' : ''}${item}`}
-                        active={active}
-                        onPress={() => toggleListItem('contraindications', item)}
-                        style={active ? styles.warningTag : undefined}
-                      />
-                    );
-                  })}
-                </View>
-              </View>
-
-              <View>
-                <Text style={styles.microLabel}>③ LIMITS</Text>
-                <View style={styles.tagWrap}>
-                  {COMMON_RESTRICTS.map(item => (
-                    <TagPill
-                      key={item}
-                      label={item}
-                      active={draft.restrictions.includes(item)}
-                      onPress={() => toggleListItem('restrictions', item)}
-                    />
-                  ))}
-                </View>
-                <View style={styles.mt8}>
-                  <SketchInput
-                    placeholder="Add your own limit..."
-                    value={draft.restrictionOther}
-                    onChangeText={restrictionOther => setDraftPatch({ restrictionOther })}
-                  />
-                </View>
-              </View>
-
-              <SketchBox
-                seed={195}
-                style={styles.summaryBox}
-                fill="rgba(255,250,235,0.5)"
-              >
-                <Text style={styles.summaryLabel}>SO FAR</Text>
-                <Text style={styles.summaryText}>
-                  {draft.diagnosis || 'no diagnosis yet'} ·{' '}
-                  {draft.contraindications.length} to avoid ·{' '}
-                  {draft.restrictions.length + (draft.restrictionOther.trim() ? 1 : 0)} limits
-                </Text>
-              </SketchBox>
-            </View>
-          ) : null}
-
+          <ClinicalVoiceSession
+            draft={draft}
+            setDraftPatch={setDraftPatch}
+            toggleListItem={toggleListItem}
+          />
           <View style={styles.buttonStack}>
             <InkButton label="Continue ->" onPress={goNext} style={styles.fullButton} />
             <Pressable onPress={goNext}>
@@ -758,6 +661,261 @@ export default function SentinelOnboardingScreen({ navigation, route }: Props) {
     </View>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLINICAL VOICE SESSION — "Talk about it" mic-driven intake
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseClinicalTranscript(text: string): Partial<DraftState> {
+  const lower = text.toLowerCase();
+  const patch: Partial<DraftState> = {};
+
+  // Diagnosis: check known conditions first, then free-form capture
+  for (const d of DIAGNOSIS_SUGGEST) {
+    if (lower.includes(d.toLowerCase())) {
+      patch.diagnosis = d;
+      break;
+    }
+  }
+  if (!patch.diagnosis) {
+    const m = lower.match(/(?:i have|my diagnosis is|diagnosed with|diagnosis:?)\s+([^,.]+)/);
+    if (m) patch.diagnosis = m[1].trim();
+  }
+
+  // Contraindications: keyword overlap with known list
+  const contras = COMMON_CONTRAS.filter(c => {
+    const words = c.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    return words.some(w => lower.includes(w));
+  });
+  if (contras.length > 0) patch.contraindications = contras;
+
+  // Restrictions: keyword overlap with known list
+  const rests = COMMON_RESTRICTS.filter(r => {
+    const words = r.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    return words.some(w => lower.includes(w));
+  });
+  if (rests.length > 0) patch.restrictions = rests;
+
+  return patch;
+}
+
+type VoiceState = 'idle' | 'listening' | 'done';
+
+function ClinicalVoiceSession({
+  draft,
+  setDraftPatch,
+  toggleListItem,
+}: {
+  draft: DraftState;
+  setDraftPatch: (p: Partial<DraftState>) => void;
+  toggleListItem: (key: 'contraindications' | 'restrictions', value: string) => void;
+}) {
+  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
+  const [partialText, setPartialText] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const pulseLoop = useRef<Animated.CompositeAnimation | null>(null);
+
+  useEffect(() => {
+    Voice.onSpeechPartialResults = e => {
+      setPartialText(e.value?.[0] ?? '');
+    };
+    Voice.onSpeechResults = e => {
+      const transcript = e.value?.[0] ?? '';
+      const extracted = parseClinicalTranscript(transcript);
+      setDraftPatch(extracted);
+      setPartialText(transcript);
+      setVoiceState('done');
+    };
+    Voice.onSpeechError = () => {
+      setVoiceState('idle');
+      stopPulse();
+    };
+    return () => {
+      Voice.destroy().catch(() => {});
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startPulse = () => {
+    pulseLoop.current = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.25, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ]),
+    );
+    pulseLoop.current.start();
+  };
+
+  const stopPulse = () => {
+    pulseLoop.current?.stop();
+    pulseAnim.setValue(1);
+  };
+
+  const startListening = async () => {
+    try {
+      setPartialText('');
+      setVoiceState('listening');
+      startPulse();
+      await Voice.start('en-US');
+    } catch {
+      setVoiceState('idle');
+      stopPulse();
+      Alert.alert('Microphone unavailable', 'Make sure Sentinel has microphone permission.');
+    }
+  };
+
+  const stopListening = async () => {
+    try {
+      await Voice.stop();
+    } catch { /* ignore */ }
+    stopPulse();
+  };
+
+  const isListening = voiceState === 'listening';
+
+  return (
+    <View style={voiceStyles.wrap}>
+      {/* Mic CTA card */}
+      <Pressable onPress={isListening ? stopListening : startListening}>
+        <SketchBox
+          seed={170}
+          style={voiceStyles.ctaBox}
+          fill={isListening ? 'rgba(196,119,90,0.22)' : 'rgba(236,213,201,0.75)'}
+          stroke={COLORS.accentDeep}
+          strokeWidth={2}
+          double={isListening}
+        >
+          <View style={voiceStyles.ctaRow}>
+            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+              <SketchCircle
+                size={52}
+                seed={171}
+                fill={isListening ? COLORS.accent : 'rgba(255,245,239,0.85)'}
+                stroke={COLORS.accentDeep}
+              >
+                <TalkIcon />
+              </SketchCircle>
+            </Animated.View>
+            <View style={voiceStyles.flex}>
+              <Text style={voiceStyles.ctaTitle}>
+                {isListening ? 'Listening...' : voiceState === 'done' ? 'Got it!' : 'Talk about it'}
+              </Text>
+              <Text style={[styles.cardSub, { color: COLORS.accentDeep }]}>
+                {isListening
+                  ? 'Tap to stop'
+                  : voiceState === 'done'
+                  ? 'Tap to re-record'
+                  : 'diagnosis · avoid · limits'}
+              </Text>
+            </View>
+            {voiceState !== 'listening' && (
+              <Text style={voiceStyles.chevron}>〉</Text>
+            )}
+          </View>
+        </SketchBox>
+      </Pressable>
+
+      {/* Live transcript bubble */}
+      {(isListening || partialText !== '') ? (
+        <SketchBox seed={172} style={voiceStyles.transcriptBox} fill="rgba(255,250,235,0.6)">
+          <Text style={voiceStyles.transcriptText} numberOfLines={4}>
+            {partialText || '...'}
+          </Text>
+        </SketchBox>
+      ) : null}
+
+      {/* Extracted fields summary + edit toggle */}
+      {voiceState === 'done' ? (
+        <View style={voiceStyles.resultWrap}>
+          <SketchBox seed={195} style={styles.summaryBox} fill="rgba(255,250,235,0.5)">
+            <Text style={styles.summaryLabel}>HEARD</Text>
+            <Text style={styles.summaryText}>
+              {draft.diagnosis || 'no diagnosis'} · {draft.contraindications.length} to avoid · {draft.restrictions.length} limits
+            </Text>
+          </SketchBox>
+          <Pressable onPress={() => setShowForm(f => !f)} style={voiceStyles.editLink}>
+            <Text style={voiceStyles.editLinkText}>{showForm ? 'hide editor' : 'review / edit fields'}</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {/* Manual form (always shown if voice hasn't been used yet, or toggled) */}
+      {(voiceState === 'idle' || showForm) ? (
+        <View style={styles.talkDetails}>
+          <View>
+            <Text style={styles.microLabel}>① DIAGNOSIS</Text>
+            <SketchInput
+              multiline
+              placeholder="e.g. ACL reconstruction (left)"
+              value={draft.diagnosis}
+              onChangeText={diagnosis => setDraftPatch({ diagnosis })}
+            />
+            <View style={styles.tagWrap}>
+              {DIAGNOSIS_SUGGEST.slice(0, 5).map(item => (
+                <TagPill key={item} label={item} onPress={() => setDraftPatch({ diagnosis: item })} />
+              ))}
+            </View>
+          </View>
+          <View>
+            <Text style={styles.microLabel}>② TO AVOID</Text>
+            <View style={styles.tagWrap}>
+              {COMMON_CONTRAS.map(item => {
+                const active = draft.contraindications.includes(item);
+                return (
+                  <TagPill
+                    key={item}
+                    label={`${active ? '⚠ ' : ''}${item}`}
+                    active={active}
+                    onPress={() => toggleListItem('contraindications', item)}
+                    style={active ? styles.warningTag : undefined}
+                  />
+                );
+              })}
+            </View>
+          </View>
+          <View>
+            <Text style={styles.microLabel}>③ LIMITS</Text>
+            <View style={styles.tagWrap}>
+              {COMMON_RESTRICTS.map(item => (
+                <TagPill
+                  key={item}
+                  label={item}
+                  active={draft.restrictions.includes(item)}
+                  onPress={() => toggleListItem('restrictions', item)}
+                />
+              ))}
+            </View>
+            <View style={styles.mt8}>
+              <SketchInput
+                placeholder="Add your own limit..."
+                value={draft.restrictionOther}
+                onChangeText={restrictionOther => setDraftPatch({ restrictionOther })}
+              />
+            </View>
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+const voiceStyles = StyleSheet.create({
+  wrap: { gap: 12 },
+  flex: { flex: 1 },
+  ctaBox: { paddingHorizontal: 20, paddingVertical: 18 },
+  ctaRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  ctaTitle: { fontFamily: FONTS.display, fontSize: 26, lineHeight: 28, color: COLORS.accentDeep },
+  chevron: { fontSize: 28, color: COLORS.accentDeep },
+  transcriptBox: { paddingHorizontal: 14, paddingVertical: 12, marginTop: 4 },
+  transcriptText: { fontFamily: FONTS.hand, fontSize: 15, color: COLORS.ink2, lineHeight: 22 },
+  resultWrap: { gap: 6 },
+  editLink: { alignSelf: 'flex-start', paddingVertical: 4 },
+  editLinkText: {
+    fontFamily: FONTS.hand, fontSize: 13, color: COLORS.ink3,
+    textDecorationLine: 'underline',
+  },
+});
 
 function FieldBlock({
   label,

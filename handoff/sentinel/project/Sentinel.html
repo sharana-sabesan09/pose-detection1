@@ -237,12 +237,12 @@ function App() {
 function Tweaks({ tweak, setTweak }) {
   return (
     <TweaksPanel title="Tweaks">
-      <TweakSection title="View">
+      <TweakSection label="View">
         <TweakRadio label="Mode" value={tweak.mode} onChange={v => setTweak('mode', v)}
           options={[{value:'showcase', label:'All screens'}, {value:'play', label:'Interactive'}]} />
       </TweakSection>
       {tweak.mode === 'play' && (
-        <TweakSection title="Start at">
+        <TweakSection label="Start at">
           <TweakSelect label="Screen" value={tweak.startScreen} onChange={v => setTweak('startScreen', v)}
             options={[
               {value:'home', label:'Home'},
@@ -256,12 +256,12 @@ function Tweaks({ tweak, setTweak }) {
         </TweakSection>
       )}
       {tweak.mode === 'showcase' && (
-        <TweakSection title="Sections">
+        <TweakSection label="Sections">
           <TweakToggle label="Onboarding" value={tweak.showOnboarding} onChange={v => setTweak('showOnboarding', v)} />
           <TweakToggle label="Main app" value={tweak.showMain} onChange={v => setTweak('showMain', v)} />
         </TweakSection>
       )}
-      <TweakSection title="Aesthetic">
+      <TweakSection label="Aesthetic">
         <TweakRadio label="Paper tone" value={tweak.paperTone} onChange={v => setTweak('paperTone', v)}
           options={[{value:'warm',label:'Warm'},{value:'cool',label:'Cool'},{value:'bright',label:'Bright'}]} />
       </TweakSection>

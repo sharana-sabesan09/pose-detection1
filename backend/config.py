@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "dev-secret-change-in-prod"
     CHROMA_PERSIST_DIR: str = "./chroma_db"
     AGENTVERSE_MAILBOX_KEY: str = ""
+    ELEVENLABS_API_KEY: str = ""
+    ELEVENLABS_VOICE_ID: str = "JBFqnCBsd6RMkjVDRZzb"
     DEV_MODE: bool = True
 
     @field_validator("DATABASE_URL")

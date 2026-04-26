@@ -55,5 +55,13 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Caveat.ttf</string>
+		<string>Kalam-Regular.ttf</string>
+		<string>Kalam-Bold.ttf</string>
+		<string>JetBrainsMono.ttf</string>
+		<string>PatrickHand-Regular.ttf</string>
+	</array>
 </dict>
 </plist>

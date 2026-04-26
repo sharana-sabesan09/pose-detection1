@@ -9,6 +9,7 @@ import routers.patients as patients
 import routers.sessions as sessions
 import routers.reports as reports
 import routers.exports as exports
+import routers.tts as tts
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ app.include_router(patients.router)
 app.include_router(sessions.router)
 app.include_router(reports.router)
 app.include_router(exports.router)
+app.include_router(tts.router)
 
 
 @app.get("/health")

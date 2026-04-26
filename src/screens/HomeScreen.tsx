@@ -10,6 +10,7 @@ import {
 import { loadPatientInfo, PatientInfo } from '../engine/patientInfo';
 import { loadStoredProfile } from '../engine/profileStorage';
 import type { UserProfile } from '../types';
+import Svg, { Circle, Path } from 'react-native-svg';
 import {
   DoctorIcon,
   MovementsIcon,
@@ -228,7 +229,22 @@ export default function HomeScreen({ navigation }: Props) {
                 <Text style={styles.metricPercent}>%</Text>
               </Text>
             </View>
-            <View style={styles.sparkline} />
+            <Svg
+              width="100%"
+              height={20}
+              viewBox="0 0 100 20"
+              preserveAspectRatio="none"
+              style={{ marginTop: 4 }}
+            >
+              <Path
+                d="M 2 6 Q 15 8, 25 12 T 50 9 T 75 14 T 98 16"
+                stroke={COLORS.accent}
+                strokeWidth="1.6"
+                fill="none"
+                strokeLinecap="round"
+              />
+              <Circle cx="98" cy="16" r="2.5" fill={COLORS.bad} />
+            </Svg>
             <Text style={[styles.metricSmall, { color: COLORS.accentDeep }]}>
               down 3% this week
             </Text>
@@ -591,13 +607,6 @@ const styles = StyleSheet.create({
   metricSlash: {
     fontFamily: FONTS.hand,
     fontSize: 12,
-  },
-  sparkline: {
-    marginTop: 6,
-    height: 4,
-    borderRadius: 4,
-    backgroundColor: COLORS.accent,
-    opacity: 0.5,
   },
   metricSmall: {
     marginTop: 6,
