@@ -582,7 +582,11 @@ export default function SessionScreen() {
         </View>
 
         <View style={styles.bottomStack} pointerEvents="box-none">
-          <LiveScoresCard scores={scores} initialized={initialized} />
+          <LiveScoresCard
+            scores={scores}
+            initialized={initialized}
+            showAll={currentExercise === 'walking' && sessionState === 'recording'}
+          />
           <SessionControls
             state={sessionState}
             patient={patient}
@@ -794,16 +798,24 @@ function SessionControls({
 function LiveScoresCard({
   scores,
   initialized,
+  showAll,
 }: {
   scores: RiskScores;
   initialized: boolean;
+  // true only during the walking phase — surfaces gait + sway alongside balance
+  // and fall risk. For SLS / LSD / awaiting / idle states we keep only the two
+  // scores that are clinically meaningful for stationary exercises.
+  showAll: boolean;
 }) {
-  const items = [
-    { label: 'Balance', value: Math.round(scores.balanceStability) },
-    { label: 'Gait', value: Math.round(scores.gaitRegularity) },
-    { label: 'Sway', value: Math.round(scores.lateralSway) },
+  const allItems = [
+    { label: 'Balance',   value: Math.round(scores.balanceStability) },
+    { label: 'Gait',      value: Math.round(scores.gaitRegularity) },
+    { label: 'Sway',      value: Math.round(scores.lateralSway) },
     { label: 'Fall risk', value: Math.round(100 - scores.overallFallRisk), inverse: true },
   ];
+  const items = showAll
+    ? allItems
+    : allItems.filter(it => it.label === 'Balance' || it.label === 'Fall risk');
 
   return (
     <SketchBox
