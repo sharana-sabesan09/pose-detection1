@@ -1,0 +1,32 @@
+# Mobile app code — not needed for backend deploy
+android/
+ios/
+src/
+assets/
+App.tsx
+index.js
+app.json
+babel.config.js
+metro.config.js
+react-native.config.js
+template/
+template.config.js
+jest.exercise.config.js
+package copy.json
+tsconfig.json
+skills-lock.json
+schema.md
+
+# Large data/artifact directories
+exports/
+references/
+handoff/
+docs/
+tools/
+
+# Dev artefacts
+node_modules/
+*.mp4
+*.csv
+*.zip
+private_keys.json

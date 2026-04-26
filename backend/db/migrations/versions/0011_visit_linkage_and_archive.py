@@ -1,28 +1,16 @@
 """visit linkage on exercise_sessions and multi_exercise_sessions archive
 
-Revision ID: 0009
-Revises: 0008
-Create Date: 2026-04-25
-
-Adds two pieces:
-
-  1. Per-exercise visit linkage on the existing ``exercise_sessions`` table:
-     ``visit_id`` (the top-level MultiExerciseSession.sessionId from the
-     mobile app — shared across the 5 rows produced by one recording visit)
-     and ``injured_joint_rom`` (denormalised carve-out from
-     patient.injuredJoint.romByExercise so longitudinal agents can query
-     a single table without joins).
-
-  2. ``multi_exercise_sessions`` — write-only archive table that stores the
-     full MultiExerciseSession JSON payload verbatim. The current ingest
-     path does NOT read from this table; it exists for a future
-     longitudinal report agent.
+Revision ID: 0011
+Revises: 0010
+Create Date: 2026-04-26
 """
+
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0009"
-down_revision = "0008"
+
+revision = "0011"
+down_revision = "0010"
 branch_labels = None
 depends_on = None
 

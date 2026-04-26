@@ -62,7 +62,11 @@ import {
 } from '../engine/exercise/exporter';
 import { buildLandmarkCsv } from '../engine/csvLogger';
 import { BACKEND_URL, LOCAL_EXPORTS_URL } from '../constants';
-import { POSE_HTML } from '../engine/poseHtml';
+import {
+  buildGhostExerciseInjection,
+  POSE_HTML,
+  POSE_WEBVIEW_KEY,
+} from '../engine/poseHtml';
 import { loadStoredProfile, saveStoredProfile } from '../engine/profileStorage';
 import { upsertPatientProfile } from '../engine/backendClient';
 import { loadPatientInfo, PatientInfo } from '../engine/patientInfo';
@@ -108,6 +112,38 @@ function modeForExercise(e: ExerciseType): SessionMode {
   return e === 'walking' ? 'walking' : 'standing';
 }
 
+const CALIBRATION_PREFIX: ExerciseType[] = ['leftSls', 'rightSls', 'leftLsd', 'rightLsd'];
+
+function newCalibrationBatchId(): string {
+  const g = globalThis as unknown as { crypto?: { randomUUID?: () => string } };
+  if (g.crypto?.randomUUID) return g.crypto.randomUUID();
+  return `cal-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function programStartsWithCalibration(program: ExerciseType[]): boolean {
+  if (program.length < CALIBRATION_PREFIX.length) return false;
+  return CALIBRATION_PREFIX.every((exercise, idx) => program[idx] === exercise);
+}
+
+function calibrationStepForExercise(exercise: string): 1 | 2 | 3 | 4 | undefined {
+  if (exercise === 'leftSls') return 1;
+  if (exercise === 'rightSls') return 2;
+  if (exercise === 'leftLsd') return 3;
+  if (exercise === 'rightLsd') return 4;
+  return undefined;
+}
+
+function feedbackExerciseType(exercise: ExerciseType): 'sls' | 'lsdt' {
+  return exercise === 'leftLsd' || exercise === 'rightLsd' ? 'lsdt' : 'sls';
+}
+
+function liveErrorsToClassification(errors: RepErrors): string {
+  const count = Object.values(errors).filter(Boolean).length;
+  if (count <= 1) return 'good';
+  if (count <= 3) return 'fair';
+  return 'poor';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -118,6 +154,7 @@ export default function SessionScreen() {
   const [scores,      setScores]      = useState<RiskScores>(DEFAULT_SCORES);
   const [initialized, setInitialized] = useState(false);
   const [webViewActive, setWebViewActive] = useState(false);
+  const [webViewReady, setWebViewReady] = useState(false);
 
   // ── Session state ─────────────────────────────────────────────────────────
   const [sessionState, setSessionState] = useState<SessionState>('idle');
@@ -148,6 +185,10 @@ export default function SessionScreen() {
     patient && exerciseIdx < patient.curr_program.length
       ? patient.curr_program[exerciseIdx]
       : null;
+  const overlayExercise: ExerciseType | null =
+    sessionState === 'awaiting' || sessionState === 'recording'
+      ? currentExercise
+      : null;
 
   // ── Load profile + patient info on mount ─────────────────────────────────
   useEffect(() => {
@@ -176,9 +217,21 @@ export default function SessionScreen() {
   useFocusEffect(
     useCallback(() => {
       setWebViewActive(true);
-      return () => setWebViewActive(false);
+      return () => {
+        setWebViewReady(false);
+        setWebViewActive(false);
+      };
     }, []),
   );
+
+  useEffect(() => {
+    if (!webViewActive || !webViewReady) return;
+    try {
+      webViewRef.current?.injectJavaScript(buildGhostExerciseInjection(overlayExercise));
+    } catch {
+      /* non-fatal */
+    }
+  }, [overlayExercise, webViewActive, webViewReady]);
 
   // ── Countdown timer while recording ───────────────────────────────────────
   useEffect(() => {
@@ -284,15 +337,6 @@ export default function SessionScreen() {
     exerciseStartedAtRef.current = Date.now();
     pipelineRef.current = new ExercisePipeline(currentExercise);
     detectorsRef.current.reset(); // fresh per-exercise live windows
-    // Tell the WebView which reference "ghost trainer" loop to show for this exercise.
-    try {
-      const js = `try { window.__setGhostExercise && window.__setGhostExercise(${JSON.stringify(
-        currentExercise,
-      )}); } catch (e) {} true;`;
-      webViewRef.current?.injectJavaScript(js);
-    } catch {
-      /* non-fatal */
-    }
     setSessionState('recording');
   }, [currentExercise]);
 
@@ -480,6 +524,7 @@ export default function SessionScreen() {
     <View style={styles.root}>
       {webViewActive && (
         <WebView
+          key={POSE_WEBVIEW_KEY}
           ref={webViewRef}
           style={StyleSheet.absoluteFill}
           source={{ html: POSE_HTML, baseUrl: 'https://localhost' }}
@@ -489,6 +534,8 @@ export default function SessionScreen() {
           originWhitelist={['*']}
           mixedContentMode="always"
           javaScriptEnabled
+          onLoadStart={() => setWebViewReady(false)}
+          onLoadEnd={() => setWebViewReady(true)}
           onMessage={onMessage}
         />
       )}

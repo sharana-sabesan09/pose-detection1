@@ -102,34 +102,16 @@ export const POSE_HTML = `
       [11,13],[13,15],[12,14],[14,16],
     ];
 
-    const lrPartner = (() => {
-      const p = Array.from({ length: 33 }, (_, i) => i);
-      const swap = (a, b) => { const t = p[a]; p[a] = p[b]; p[b] = t; };
-      swap(1,4); swap(2,5); swap(3,6); swap(7,8); swap(9,10);
-      swap(11,12); swap(13,14); swap(15,16); swap(17,18); swap(19,20);
-      swap(21,22); swap(23,24); swap(25,26); swap(27,28); swap(29,30); swap(31,32);
-      return p;
-    })();
-
-    let ghostExercise = 'leftSls';
-    let ghostMirror = false;
+    // RN injects the current exercise after the page loads. Default to hidden so
+    // the screen never flashes an outdated calibration ghost on boot/remount.
+    let ghostExercise = 'walking';
     let ghostRefIdx = 0;
     let lastRefTs = 0;
 
     window.__setGhostExercise = (ex) => {
-      ghostExercise = ex || 'leftSls';
-      ghostMirror = ghostExercise === 'rightSls' || ghostExercise === 'rightLsd';
+      ghostExercise = ex || 'walking';
       ghostRefIdx = 0;
     };
-
-    function mirrorLandmarks(frame) {
-      const out = new Array(33);
-      for (let i = 0; i < 33; i++) {
-        const src = frame[lrPartner[i]];
-        out[i] = { x: 1 - src.x, y: src.y, z: src.z, v: src.v };
-      }
-      return out;
-    }
 
     function alignGhostLm(lm, vw, vh, scale, ox, oy, W, H) {
       return {
@@ -149,8 +131,7 @@ export const POSE_HTML = `
       const offsetX = (W - vw * scale) / 2;
       const offsetY = (H - vh * scale) / 2;
 
-      const raw = cycle[ghostRefIdx % cycle.length];
-      const frame = ghostMirror ? mirrorLandmarks(raw) : raw;
+      const frame = cycle[ghostRefIdx % cycle.length];
 
       ctx.save();
       ctx.globalAlpha = 0.42;
@@ -252,3 +233,21 @@ export const POSE_HTML = `
 </body>
 </html>
 `;
+
+function hashString(value: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+export const POSE_WEBVIEW_KEY = `pose-html-${hashString(POSE_HTML)}`;
+
+export function buildGhostExerciseInjection(exercise: string | null | undefined): string {
+  const ghostExercise = exercise ?? 'walking';
+  return `try { window.__setGhostExercise && window.__setGhostExercise(${JSON.stringify(
+    ghostExercise,
+  )}); } catch (e) {} true;`;
+}

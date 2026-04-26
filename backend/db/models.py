@@ -165,7 +165,7 @@ class Exercise(Base):
 
     patient = relationship("Patient", foreign_keys=[patient_id])
     linked_session = relationship("Session", foreign_keys=[linked_session_id])
-    reps = relationship("RepAnalysis", back_populates="exercise_session", cascade="all, delete-orphan")
+    reps = relationship("RepAnalysis", back_populates="exercise", cascade="all, delete-orphan")
 
 
 class RepAnalysis(Base):
@@ -233,6 +233,27 @@ class MultiExerciseSessionArchive(Base):
     duration_ms = Column(Float, nullable=False)
     payload_json = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ExerciseSessionArtifact(Base):
+    __tablename__ = "exercise_session_artifacts"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    exercise_session_id = Column(String(36), ForeignKey("exercise_sessions.id"), nullable=False)
+    artifact_type = Column(String(64), nullable=False)
+    content_type = Column(String(128), nullable=False)
+    bytes = Column(LargeBinary, nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_exercise_session_artifacts_session_type_created",
+            "exercise_session_id",
+            "artifact_type",
+            "created_at",
+        ),
+    )
 
 
 class AgentArtifact(Base):

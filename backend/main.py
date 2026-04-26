@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from rag.loader import load_clinical_guidelines
 from db.session import run_migrations
 import routers.auth as auth
@@ -29,6 +31,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Sentinel Backend", lifespan=lifespan)
+
+# CORS — allow the dashboard and any Railway preview URLs.
+# CORS_ORIGINS env var can override; falls back to a permissive wildcard for
+# internal Railway traffic where both services share a private network.
+_raw = os.getenv("CORS_ORIGINS", "*")
+_origins = [o.strip() for o in _raw.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(auth.router)
 app.include_router(patients.router)
