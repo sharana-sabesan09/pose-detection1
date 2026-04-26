@@ -103,7 +103,8 @@ export const POSE_HTML = `
     /** Panel morphs fullscreen → corner PiP over this duration (ease-in-out). */
     const GHOST_LAYOUT_TRANSITION_MS = 700;
     const GHOST_PANEL_BG = '#D7B1A5';
-    const GHOST_FILL_GREEN = '#15732a';
+    const GHOST_FILL_TRAINER = '#ffffff';
+    const GHOST_OUTLINE_TRAINER = '#000000';
     const GHOST_CORNER_MARGIN = 16;
     const GHOST_CORNER_W_FRAC = 0.28;
     const GHOST_CORNER_H_FRAC = 0.34;
@@ -124,7 +125,7 @@ export const POSE_HTML = `
         '23-24': 1.28,
         '23-25': 1.1, '24-26': 1.1,
         '25-27': 0.66, '26-28': 0.66,
-        '27-29': 0.45, '28-30': 0.45,
+        '27-29': 0.74, '28-30': 0.74,
         '11-13': 0.78, '12-14': 0.78,
         '13-15': 0.52, '14-16': 0.52,
       };
@@ -137,7 +138,7 @@ export const POSE_HTML = `
       15: 0.72, 16: 0.72,
       23: 1.18, 24: 1.18,
       25: 1.05, 26: 1.05,
-      27: 0.82, 28: 0.82,
+      27: 0.98, 28: 0.98,
     };
 
     // RN injects the current exercise after the page loads. Default to hidden so
@@ -192,8 +193,8 @@ export const POSE_HTML = `
       return out;
     }
 
-    /** Filled limb “tube” between two screen points (silhouette, not stick lines). */
-    function fillLimbCapsule(ctx, ax, ay, bx, by, halfW) {
+    /** Filled limb “tube” + black outline between two screen points. */
+    function fillStrokeLimbCapsule(ctx, ax, ay, bx, by, halfW, outlineW) {
       const dx = bx - ax, dy = by - ay;
       const len = Math.hypot(dx, dy) || 1;
       const nx = (-dy / len) * halfW;
@@ -204,7 +205,13 @@ export const POSE_HTML = `
       ctx.lineTo(bx - nx, by - ny);
       ctx.lineTo(bx + nx, by + ny);
       ctx.closePath();
+      ctx.fillStyle = GHOST_FILL_TRAINER;
       ctx.fill();
+      ctx.strokeStyle = GHOST_OUTLINE_TRAINER;
+      ctx.lineWidth = outlineW;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.stroke();
     }
 
     const GHOST_JOINT_IDX = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
@@ -267,13 +274,13 @@ export const POSE_HTML = `
 
     function drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, baseLimbHalf, jointRBase) {
       ctx.globalAlpha = 1;
-      ctx.fillStyle = GHOST_FILL_GREEN;
       for (const [a, b] of GHOST_CONNECTIONS) {
         const pa = ghostPx(frame[a], vw, vh, sc, ox, oy, W, H);
         const pb = ghostPx(frame[b], vw, vh, sc, ox, oy, W, H);
         if (pa.v < 0.2 || pb.v < 0.2) continue;
         const hw = baseLimbHalf * ghostLimbHalfWMult(a, b);
-        fillLimbCapsule(ctx, pa.x, pa.y, pb.x, pb.y, hw);
+        const ow = Math.max(2, Math.min(4, hw * 0.34));
+        fillStrokeLimbCapsule(ctx, pa.x, pa.y, pb.x, pb.y, hw, ow);
       }
       for (const i of GHOST_JOINT_IDX) {
         const p = ghostPx(frame[i], vw, vh, sc, ox, oy, W, H);
@@ -281,7 +288,11 @@ export const POSE_HTML = `
         const jr = jointRBase * (GHOST_JOINT_R_MULT[i] != null ? GHOST_JOINT_R_MULT[i] : 1);
         ctx.beginPath();
         ctx.arc(p.x, p.y, jr, 0, Math.PI * 2);
+        ctx.fillStyle = GHOST_FILL_TRAINER;
         ctx.fill();
+        ctx.strokeStyle = GHOST_OUTLINE_TRAINER;
+        ctx.lineWidth = Math.max(2, Math.min(3.5, jr * 0.26));
+        ctx.stroke();
       }
       const p11 = ghostPx(frame[11], vw, vh, sc, ox, oy, W, H);
       const p12 = ghostPx(frame[12], vw, vh, sc, ox, oy, W, H);
@@ -289,13 +300,18 @@ export const POSE_HTML = `
       if (nose.v >= 0.2 && p11.v >= 0.2 && p12.v >= 0.2) {
         const mx = (p11.x + p12.x) / 2;
         const my = (p11.y + p12.y) / 2;
-        fillLimbCapsule(ctx, nose.x, nose.y, mx, my, baseLimbHalf * 0.4);
+        const nh = baseLimbHalf * 0.4;
+        fillStrokeLimbCapsule(ctx, nose.x, nose.y, mx, my, nh, Math.max(1.8, nh * 0.38));
       }
       if (nose.v >= 0.2) {
         const headR = Math.max(jointRBase * 1.75, baseLimbHalf * 2.25);
         ctx.beginPath();
         ctx.arc(nose.x, nose.y, headR, 0, Math.PI * 2);
+        ctx.fillStyle = GHOST_FILL_TRAINER;
         ctx.fill();
+        ctx.strokeStyle = GHOST_OUTLINE_TRAINER;
+        ctx.lineWidth = Math.max(2.2, Math.min(4, headR * 0.14));
+        ctx.stroke();
       }
     }
 
