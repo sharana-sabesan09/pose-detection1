@@ -143,20 +143,53 @@ export async function fetchProgressReport(patientId: string) {
   }>(`/reports/${patientId}/progress`, 'GET');
 }
 
-/** ElevenLabs TTS via backend; returns base64 MP3 for WebView HTML5 Audio. */
+/** ElevenLabs TTS — direct API call; returns base64 MP3 for WebView HTML5 Audio. */
 export async function fetchTtsSpeak(text: string, timeoutMs = 30000): Promise<string | null> {
   const t = text.trim();
   if (!t) return null;
+
+  const { ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID } = await import('../constants');
+  if (!ELEVENLABS_API_KEY) {
+    console.warn('[fetchTtsSpeak] ELEVENLABS_API_KEY not set');
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    const data = await backendRequest<{ audio_b64: string }>(
-      '/tts/speak',
-      'POST',
-      { text: t },
-      timeoutMs,
+    const res = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
+      {
+        method: 'POST',
+        headers: {
+          'xi-api-key': ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+          'Accept': 'audio/mpeg',
+        },
+        body: JSON.stringify({
+          text: t,
+          model_id: 'eleven_multilingual_v2',
+          output_format: 'mp3_44100_128',
+        }),
+        signal: controller.signal,
+      },
     );
-    return data?.audio_b64 ?? null;
+
+    if (!res.ok) {
+      console.warn('[fetchTtsSpeak] ElevenLabs HTTP', res.status);
+      return null;
+    }
+
+    const buffer = await res.arrayBuffer();
+    const bytes  = new Uint8Array(buffer);
+    let binary   = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
   } catch (e) {
     console.warn('[fetchTtsSpeak]', (e as Error).message);
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
