@@ -230,7 +230,7 @@ export default function SessionScreen() {
         }
 
         // 2b) Railway/Postgres ingest (non-fatal if it fails).
-        const backendRes = await postSessionToBackend(BACKEND_URL, payload);
+        const backendRes = await postSessionToBackend(BACKEND_URL, payload, framesCsv);
         if (backendRes.ok) {
           console.log('[export] session stored:', backendRes.id, backendRes.linkedSessionId);
           if (localExportRes.ok && localExportRes.writtenTo) {
