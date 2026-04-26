@@ -5,6 +5,15 @@ let cachedAccessToken: string | null = null;
 
 type HttpMethod = 'GET' | 'POST' | 'PUT';
 
+export interface ReporterSummary {
+  summary: string;
+  session_highlights: string[];
+  recommendations: string[];
+  evidence_map?: Record<string, unknown>;
+  reportability?: string;
+  data_coverage?: Record<string, unknown>;
+}
+
 export interface PatientOverview {
   id: string;
   metadata: {
@@ -128,7 +137,7 @@ export async function fetchPatientOverview(patientId: string) {
 }
 
 export async function fetchLatestReport(patientId: string) {
-  return backendRequest<{ summary: string; session_highlights: string[]; recommendations: string[] }>(
+  return backendRequest<ReporterSummary>(
     `/reports/${patientId}/latest`,
     'GET',
   );
@@ -141,6 +150,67 @@ export async function fetchProgressReport(patientId: string) {
     milestones_reached: string[];
     next_goals: string[];
   }>(`/reports/${patientId}/progress`, 'GET');
+}
+
+export async function startBackendSession(
+  sessionId: string,
+  patientId: string,
+  ptPlan: string,
+  startedAtMs: number,
+  timeoutMs = 20000,
+) {
+  return backendRequest<{ session_id: string }>(
+    '/sessions/start',
+    'POST',
+    {
+      session_id: sessionId,
+      patient_id: patientId,
+      pt_plan: ptPlan,
+      started_at: new Date(startedAtMs).toISOString(),
+    },
+    timeoutMs,
+  );
+}
+
+export async function replaceBackendSessionFrameFeatures(
+  sessionId: string,
+  frameFeaturesCsv: string,
+  timeoutMs = 60000,
+) {
+  return backendRequest<{ status: string; stored: number }>(
+    `/sessions/${sessionId}/frame-features`,
+    'POST',
+    { frame_features_csv: frameFeaturesCsv },
+    timeoutMs,
+  );
+}
+
+export async function endBackendSession(
+  sessionId: string,
+  payload: {
+    patientId: string;
+    ptPlan: string;
+    painScores: Record<string, number>;
+    userInput: string;
+    sessionType: 'treatment' | 'assessment' | 'home_exercise_check';
+    endedAtMs: number;
+  },
+  timeoutMs = 120000,
+) {
+  return backendRequest<ReporterSummary>(
+    `/sessions/${sessionId}/end`,
+    'POST',
+    {
+      session_id: sessionId,
+      patient_id: payload.patientId,
+      pt_plan: payload.ptPlan,
+      pain_scores: payload.painScores,
+      user_input: payload.userInput,
+      session_type: payload.sessionType,
+      ended_at: new Date(payload.endedAtMs).toISOString(),
+    },
+    timeoutMs,
+  );
 }
 
 /** ElevenLabs TTS — direct API call; returns base64 MP3 for WebView HTML5 Audio. */

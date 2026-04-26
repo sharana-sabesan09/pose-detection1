@@ -25,6 +25,7 @@ import DoctorReviewScreen from './src/screens/DoctorReviewScreen';
 import ReturnScreen from './src/screens/ReturnScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import { loadStoredProfile } from './src/engine/profileStorage';
+import { flushPendingPtSessionQueue } from './src/engine/ptSessionSync';
 
 /**
  * RootStackParamList — THE TWO TOP-LEVEL ROUTES
@@ -38,7 +39,7 @@ export type RootStackParamList = {
   Session: undefined;
   Movements: undefined;
   DoctorReview: undefined;
-  Return: undefined;
+  Return: { draftId?: string } | undefined;
   Profile: undefined;
 };
 
@@ -52,6 +53,12 @@ export default function App() {
     loadStoredProfile()
       .then(profile => setHasProfile(!!profile))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    flushPendingPtSessionQueue().catch(e => {
+      console.warn('[pt-session-sync] startup retry failed:', (e as Error).message);
+    });
   }, []);
 
   if (loading) {

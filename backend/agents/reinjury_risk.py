@@ -18,6 +18,7 @@ from uagents import Agent, Context
 from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.hipaa import hipaa_wrap
 from agents.messages import ReinjuryRiskRequest, ReinjuryRiskResponse
+from agents.pose_analysis import get_pose_data_coverage, pose_has_sufficient_data
 from db.models import AgentArtifact, Exercise, Patient, RepAnalysis, Session, SessionScore
 from schemas.session import PoseAnalysisOutput, ReinjuryRiskOutput
 from utils.artifacts import get_artifact_id, write_artifact
@@ -109,6 +110,8 @@ async def run_reinjury_risk(
     db: AsyncSession,
 ) -> ReinjuryRiskOutput:
     # ── Query 1: per-joint ROM from last 5 pose artifacts ──────────────────────
+    pose_coverage = get_pose_data_coverage(pose)
+    pose_data_sufficient = pose_has_sufficient_data(pose)
     injured_joints = await _get_injured_joints(patient_id, db)
 
     pose_artifacts_result = await db.execute(
@@ -117,10 +120,10 @@ async def run_reinjury_risk(
             AgentArtifact.patient_id == patient_id,
             AgentArtifact.agent_name == "pose_analysis_agent",
         )
-        .order_by(AgentArtifact.created_at.asc())
+        .order_by(AgentArtifact.created_at.desc())
         .limit(5)
     )
-    pose_artifacts = pose_artifacts_result.scalars().all()
+    pose_artifacts = list(reversed(pose_artifacts_result.scalars().all()))
 
     # Build per-joint ROM history (chronological)
     joint_rom_history: dict[str, list[float]] = {}
@@ -167,10 +170,10 @@ async def run_reinjury_risk(
         select(SessionScore)
         .join(Session, SessionScore.session_id == Session.id)
         .where(Session.patient_id == patient_id)
-        .order_by(SessionScore.created_at.asc())
+        .order_by(SessionScore.created_at.desc())
         .limit(5)
     )
-    recent_scores = scores_result.scalars().all()
+    recent_scores = list(reversed(scores_result.scalars().all()))
     fall_trend = [s.fall_risk_score for s in recent_scores if s.fall_risk_score is not None]
     rom_trend = [s.rom_score for s in recent_scores if s.rom_score is not None]
 
@@ -204,17 +207,77 @@ async def run_reinjury_risk(
 
     # data_sufficient = True only when ALL tracked injured joints have ≥3 sessions
     if injured_joint_trend:
-        data_sufficient = all(
+        historical_data_sufficient = all(
             v.get("data_sufficient", False) for v in injured_joint_trend.values()
         )
     else:
-        data_sufficient = sessions_with_data >= 3
+        historical_data_sufficient = sessions_with_data >= 3
+
+    data_sufficient = historical_data_sufficient and pose_data_sufficient
 
     # ── LLM call ──────────────────────────────────────────────────────────────
+    coverage_notes = []
+    if not pose_data_sufficient:
+        coverage_notes.extend(pose_coverage.get("notes", []))
+        coverage_notes.append("reinjury risk assessment skipped because current session pose data was insufficient")
+    if not historical_data_sufficient:
+        insufficient = [j for j, v in injured_joint_trend.items() if not v.get("data_sufficient", False)]
+        coverage_notes.append(f"joints with <3 sessions of ROM data: {insufficient or ['all']} - trends unreliable")
+    if not injured_joints:
+        coverage_notes.append("injured_joints not in patient metadata - fell back to flagged joints")
+
+    if not pose_data_sufficient:
+        output = ReinjuryRiskOutput(
+            score=0.0,
+            trend="unknown",
+            reasoning="Insufficient pose data to assess reinjury risk for this session.",
+            sessions_used=sessions_with_data,
+            data_sufficient=False,
+            injured_joint_trend=injured_joint_trend,
+        )
+        safe_reasoning = await hipaa_wrap(
+            content=output.reasoning,
+            actor="reinjury_risk_agent",
+            patient_id=patient_id,
+            data_type="reinjury_risk_output",
+            db=db,
+        )
+        output.reasoning = safe_reasoning
+
+        missing_fields = list(pose_coverage.get("missing_fields", []))
+        if not injured_joints and "injured_joints" not in missing_fields:
+            missing_fields.append("injured_joints")
+
+        await write_artifact(
+            agent_name="reinjury_risk_agent",
+            session_id=session_id,
+            patient_id=patient_id,
+            artifact_kind="reinjury_risk_output",
+            artifact_json={
+                "metrics": {
+                    "score": None,
+                    "trend": output.trend,
+                    "sessions_used": sessions_with_data,
+                    "data_sufficient": False,
+                    "injured_joint_trend": injured_joint_trend,
+                }
+            },
+            upstream_artifact_ids=pose_artifact_ids,
+            data_coverage={
+                "required_fields_present": False,
+                "missing_fields": missing_fields,
+                "notes": coverage_notes,
+            },
+            db=db,
+        )
+
+        await write_audit("reinjury_risk_agent", "assess_reinjury_risk", patient_id, "reinjury_risk_score", db)
+        return output
+
     joint_trend_text = json.dumps(injured_joint_trend, indent=2) if injured_joint_trend else "No per-joint ROM history available yet."
     rep_feat_text = json.dumps(rep_feature_context, indent=2) if rep_feature_context else "No exercise rep data available."
 
-    prompt = f"""Patient trend data (most recent to oldest where listed):
+    prompt = f"""Patient trend data (chronological oldest to newest where listed):
 Fall risk scores: {fall_trend}
 ROM scores (aggregate): {rom_trend}
 

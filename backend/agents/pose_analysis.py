@@ -40,6 +40,49 @@ _ERROR_THRESHOLDS: dict[str, float] = {
 }
 
 
+def build_pose_data_coverage(frame_count: int, joint_stats: dict[str, dict]) -> dict:
+    missing_fields: list[str] = []
+    notes: list[str] = []
+
+    if frame_count == 0:
+        missing_fields.append("pose_frames")
+        notes.append("no frames recorded")
+    if frame_count > 0 and not joint_stats:
+        missing_fields.append("joint_stats")
+        notes.append("frames were stored without numeric joint measurements")
+    if not missing_fields and frame_count > 0:
+        notes.append(f"{frame_count} frames analysed, {len(joint_stats)} joints tracked")
+
+    return {
+        "required_fields_present": not missing_fields,
+        "missing_fields": missing_fields,
+        "notes": notes,
+    }
+
+
+def get_pose_data_coverage(pose: PoseAnalysisOutput) -> dict:
+    coverage = build_pose_data_coverage(pose.frame_count, pose.joint_stats)
+    existing = pose.data_coverage or {}
+
+    for field in existing.get("missing_fields", []):
+        if field not in coverage["missing_fields"]:
+            coverage["missing_fields"].append(field)
+    for note in existing.get("notes", []):
+        if note not in coverage["notes"]:
+            coverage["notes"].append(note)
+
+    if "required_fields_present" in existing:
+        coverage["required_fields_present"] = (
+            coverage["required_fields_present"] and bool(existing["required_fields_present"])
+        )
+
+    return coverage
+
+
+def pose_has_sufficient_data(pose: PoseAnalysisOutput) -> bool:
+    return bool(get_pose_data_coverage(pose).get("required_fields_present"))
+
+
 async def run_pose_analysis(session_id: str, db: AsyncSession, patient_id: str | None = None) -> PoseAnalysisOutput:
     result = await db.execute(
         select(PoseFrame).where(PoseFrame.session_id == session_id).order_by(PoseFrame.timestamp)
@@ -47,18 +90,30 @@ async def run_pose_analysis(session_id: str, db: AsyncSession, patient_id: str |
     frames = result.scalars().all()
 
     if not frames:
+        data_coverage = build_pose_data_coverage(frame_count=0, joint_stats={})
         empty = PoseAnalysisOutput(
             rom_score=0.0, joint_stats={}, flagged_joints=[],
             frame_count=0, joint_coverage={},
+            data_sufficient=False,
+            data_coverage=data_coverage,
         )
         await write_artifact(
             agent_name="pose_analysis_agent",
             session_id=session_id,
             patient_id=patient_id or "",
             artifact_kind="pose_analysis_output",
-            artifact_json={"metrics": {"rom_score": 0.0, "frame_count": 0, "joint_coverage": {}, "joint_stats": {}, "flagged_joints": []}},
+            artifact_json={
+                "metrics": {
+                    "rom_score": 0.0,
+                    "frame_count": 0,
+                    "joint_coverage": {},
+                    "joint_stats": {},
+                    "flagged_joints": [],
+                    "data_sufficient": False,
+                }
+            },
             upstream_artifact_ids=[],
-            data_coverage={"required_fields_present": False, "missing_fields": ["pose_frames"], "notes": ["no frames recorded"]},
+            data_coverage=data_coverage,
             db=db,
         )
         await write_audit("pose_analysis_agent", "analyze_session", patient_id, "pose_frames", db)
@@ -102,6 +157,7 @@ async def run_pose_analysis(session_id: str, db: AsyncSession, patient_id: str |
     rom_score = min(100.0, (raw_rom / avg_expected) * 100.0)
 
     frame_count = len(frames)
+    data_coverage = build_pose_data_coverage(frame_count=frame_count, joint_stats=joint_stats)
 
     output = PoseAnalysisOutput(
         rom_score=round(rom_score, 2),
@@ -109,6 +165,8 @@ async def run_pose_analysis(session_id: str, db: AsyncSession, patient_id: str |
         flagged_joints=flagged_joints,
         frame_count=frame_count,
         joint_coverage=joint_frame_counts,
+        data_sufficient=data_coverage["required_fields_present"],
+        data_coverage=data_coverage,
     )
 
     await write_artifact(
@@ -123,14 +181,11 @@ async def run_pose_analysis(session_id: str, db: AsyncSession, patient_id: str |
                 "joint_coverage": joint_frame_counts,
                 "joint_stats": joint_stats,
                 "flagged_joints": flagged_joints,
+                "data_sufficient": output.data_sufficient,
             }
         },
         upstream_artifact_ids=[],
-        data_coverage={
-            "required_fields_present": True,
-            "missing_fields": [],
-            "notes": [f"{frame_count} frames analysed, {len(joint_stats)} joints tracked"],
-        },
+        data_coverage=data_coverage,
         db=db,
     )
 
@@ -156,5 +211,7 @@ async def _handle_pose(ctx: Context, sender: str, msg: PoseRequest):
         await ctx.send(sender, PoseResponse(
             session_id=msg.session_id,
             rom_score=0.0, joint_stats={}, flagged_joints=[],
+            data_sufficient=False,
+            data_coverage={"required_fields_present": False, "missing_fields": ["pose_analysis"], "notes": [str(e)]},
             error=str(e),
         ))

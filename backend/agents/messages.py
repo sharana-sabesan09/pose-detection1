@@ -37,6 +37,8 @@ class PoseResponse(Model):
     flagged_joints: list
     frame_count: int = 0
     joint_coverage: dict = {}
+    data_sufficient: bool = False
+    data_coverage: dict = {}
     error: Optional[str] = None
 
 

@@ -10,6 +10,7 @@ from uagents import Agent, Context
 from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.hipaa import hipaa_wrap
 from agents.messages import FallRiskRequest, FallRiskResponse
+from agents.pose_analysis import get_pose_data_coverage, pose_has_sufficient_data
 from db.models import Patient, SessionScore
 from rag.retriever import retrieve_clinical_context
 from schemas.session import FallRiskOutput, IntakeOutput, PoseAnalysisOutput
@@ -26,6 +27,61 @@ async def run_fall_risk(
     session_id: str,
     db: AsyncSession,
 ) -> FallRiskOutput:
+    pose_coverage = get_pose_data_coverage(pose)
+    if not pose_has_sufficient_data(pose):
+        output = FallRiskOutput(
+            score=0.0,
+            risk_level="unknown",
+            reasoning="Insufficient pose data to assess fall risk for this session.",
+            contributing_factors=[],
+            rag_used=False,
+            rag_sources=[],
+        )
+        safe_reasoning = await hipaa_wrap(
+            content=output.reasoning,
+            actor="fall_risk_agent",
+            patient_id=patient_id,
+            data_type="fall_risk_output",
+            db=db,
+        )
+        output.reasoning = safe_reasoning
+
+        upstream = []
+        for agent_name in ("intake_agent", "pose_analysis_agent"):
+            aid = await get_artifact_id(session_id, agent_name, db)
+            if aid:
+                upstream.append(aid)
+
+        coverage_notes = list(pose_coverage.get("notes", []))
+        coverage_notes.append("fall risk assessment skipped because pose data was insufficient")
+
+        await write_artifact(
+            agent_name="fall_risk_agent",
+            session_id=session_id,
+            patient_id=patient_id,
+            artifact_kind="fall_risk_output",
+            artifact_json={
+                "metrics": {
+                    "score": None,
+                    "risk_level": output.risk_level,
+                    "contributing_factors": output.contributing_factors,
+                    "rag_used": output.rag_used,
+                    "rag_sources": output.rag_sources,
+                    "data_sufficient": False,
+                }
+            },
+            upstream_artifact_ids=upstream,
+            data_coverage={
+                "required_fields_present": False,
+                "missing_fields": pose_coverage.get("missing_fields", []),
+                "notes": coverage_notes,
+            },
+            db=db,
+        )
+
+        await write_audit("fall_risk_agent", "assess_fall_risk", patient_id, "fall_risk_score", db)
+        return output
+
     # Read patient demographic risk fields
     patient_result = await db.execute(select(Patient).where(Patient.id == patient_id))
     patient = patient_result.scalars().first()

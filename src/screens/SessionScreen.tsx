@@ -60,6 +60,7 @@ import {
   postMultiSessionToLocalExports,
   shareMultiSessionViaSheet,
 } from '../engine/exercise/exporter';
+import { buildFrameDebugCsv } from '../engine/exercise/csvWriter';
 import { buildLandmarkCsv } from '../engine/csvLogger';
 import { BACKEND_URL, LOCAL_EXPORTS_URL } from '../constants';
 import {
@@ -71,6 +72,10 @@ import {
 import { loadStoredProfile, saveStoredProfile } from '../engine/profileStorage';
 import { upsertPatientProfile } from '../engine/backendClient';
 import { loadPatientInfo, PatientInfo } from '../engine/patientInfo';
+import {
+  createPtSessionSyncIds,
+  savePtSessionSyncDraft,
+} from '../engine/ptSessionSync';
 import { SketchBox } from '../sentinel/primitives';
 import { COLORS, FONTS } from '../sentinel/theme';
 
@@ -393,12 +398,34 @@ export default function SessionScreen() {
     );
 
     const payload = buildMultiSessionExportPayload(multiSession, framesByExerciseRef.current);
+    const flatFrameFeaturesCsv = buildFrameDebugCsv(
+      framesByExerciseRef.current.flatMap(item => item.frames),
+    );
+    const syncIds = createPtSessionSyncIds();
+    let ptSessionDraftId: string | undefined;
 
     // Live dashboard (Results tab) — only meaningful for walking. Skip if absent.
     if (walkingRecordedFramesRef.current.length > 0) {
       const demographicRisk = profileRef.current?.demographicRiskScore ?? 0;
       const result = analyzeRecording(walkingRecordedFramesRef.current, demographicRisk);
       await saveAnalysis({ ...result, id: sessionId });
+    }
+
+    try {
+      await savePtSessionSyncDraft({
+        draftId: syncIds.draftId,
+        backendSessionId: syncIds.backendSessionId,
+        visitId: sessionId,
+        patientId,
+        startedAtMs,
+        endedAtMs,
+        exerciseCount: entries.length,
+        frameFeaturesCsv: flatFrameFeaturesCsv,
+        createdAt: new Date().toISOString(),
+      });
+      ptSessionDraftId = syncIds.draftId;
+    } catch (e) {
+      console.warn('[session] PT sync draft save failed:', (e as Error).message);
     }
 
     try {
@@ -494,7 +521,8 @@ export default function SessionScreen() {
     }
 
     setSessionState('done');
-    navigation.replace('Return');
+    if (ptSessionDraftId) navigation.replace('Return', { draftId: ptSessionDraftId });
+    else navigation.replace('Return');
   }, [navigation, patient]);
 
   const stopSessionEarly = useCallback(() => {

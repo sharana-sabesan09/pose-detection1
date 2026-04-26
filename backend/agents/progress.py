@@ -19,11 +19,23 @@ from utils.audit import write_audit
 logger = logging.getLogger(__name__)
 
 
+def _weighted_average(scores: list[SessionScore], field_name: str) -> float | None:
+    weighted_values = [
+        (getattr(score, field_name), 1.0 / (i + 1))
+        for i, score in enumerate(scores)
+        if getattr(score, field_name) is not None
+    ]
+    if not weighted_values:
+        return None
+    total_weight = sum(weight for _, weight in weighted_values)
+    return sum(value * weight for value, weight in weighted_values) / total_weight
+
+
 async def run_progress(patient_id: str, db: AsyncSession) -> ProgressOutput:
     # ── Layer 1: Build structured patient timeline ────────────────────────────
     timeline = await build_patient_timeline(patient_id, db)
     if len(timeline.sessions) < 3:
-        return ProgressOutput(
+        output = ProgressOutput(
             longitudinal_report=(
                 "Insufficient longitudinal data to generate a grounded progress report. "
                 "At least 3 recorded sessions are required before trend analysis is shown."
@@ -36,6 +48,46 @@ async def run_progress(patient_id: str, db: AsyncSession) -> ProgressOutput:
                 f"Only {len(timeline.sessions)} recorded session(s) available; at least 3 are required.",
             ],
         )
+        await hipaa_wrap(
+            content=json.dumps(output.model_dump()),
+            actor="progress_agent",
+            patient_id=patient_id,
+            data_type="progress_output",
+            db=db,
+        )
+        await write_artifact(
+            agent_name="progress_agent",
+            session_id=None,
+            patient_id=patient_id,
+            artifact_kind="progress_output",
+            artifact_json={
+                "metrics": {
+                    "longitudinal_report": output.longitudinal_report,
+                    "overall_trend": output.overall_trend,
+                    "milestones_reached": output.milestones_reached,
+                    "next_goals": output.next_goals,
+                    "evidence_citations": output.evidence_citations,
+                    "data_warnings": output.data_warnings,
+                    "salient_session_ids": [],
+                    "metrics_used": {},
+                }
+            },
+            upstream_artifact_ids=[],
+            data_coverage={
+                "required_fields_present": False,
+                "missing_fields": ["minimum_session_count"],
+                "notes": output.data_warnings,
+            },
+            db=db,
+        )
+        await write_audit(
+            "progress_agent",
+            "generate_progress_report",
+            patient_id,
+            "progress_output",
+            db,
+        )
+        return output
 
     # ── Layer 2: Compute salience deterministically ───────────────────────────
     salience = compute_salience(timeline)
@@ -146,15 +198,8 @@ Output only valid JSON.""",
     acc = acc_result.scalars().first()
 
     if recent_scores:
-        total_weight = sum(1.0 / (i + 1) for i in range(len(recent_scores)))
-        fall_wavg = (
-            sum((s.fall_risk_score or 0) / (i + 1) for i, s in enumerate(recent_scores) if s.fall_risk_score is not None)
-            / total_weight if total_weight else None
-        )
-        reinjury_wavg = (
-            sum((s.reinjury_risk_score or 0) / (i + 1) for i, s in enumerate(recent_scores) if s.reinjury_risk_score is not None)
-            / total_weight if total_weight else None
-        )
+        fall_wavg = _weighted_average(recent_scores, "fall_risk_score")
+        reinjury_wavg = _weighted_average(recent_scores, "reinjury_risk_score")
         if acc:
             acc.fall_risk_avg = fall_wavg
             acc.reinjury_risk_avg = reinjury_wavg
@@ -177,19 +222,21 @@ Output only valid JSON.""",
         artifact_kind="progress_output",
         artifact_json={
             "metrics": {
+                "longitudinal_report": output.longitudinal_report,
                 "overall_trend": output.overall_trend,
                 "milestones_reached": output.milestones_reached,
                 "next_goals": output.next_goals,
                 "evidence_citations": output.evidence_citations,
                 "data_warnings": output.data_warnings,
                 "salient_session_ids": salience.salient_session_ids,
+                "salient_artifact_ids": salience.salient_artifact_ids,
                 "metrics_used": salience.salient_metrics,
             }
         },
-        upstream_artifact_ids=salience.salient_session_ids,
+        upstream_artifact_ids=salience.salient_artifact_ids,
         data_coverage={
             "required_fields_present": bool(salience.salient_session_ids),
-            "missing_fields": [],
+            "missing_fields": [] if salience.salient_artifact_ids or not salience.salient_session_ids else ["upstream_artifacts"],
             "notes": salience.data_warnings,
         },
         db=db,

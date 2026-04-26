@@ -10,6 +10,7 @@ from uagents import Agent, Context
 from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.hipaa import hipaa_wrap
 from agents.messages import ReporterRequest, ReporterResponse
+from agents.pose_analysis import get_pose_data_coverage, pose_has_sufficient_data
 from db.models import Session, SessionScore, Summary
 from schemas.session import FallRiskOutput, IntakeOutput, PoseAnalysisOutput, ReinjuryRiskOutput, ReporterOutput
 from utils.artifacts import get_artifact_id, write_artifact
@@ -27,6 +28,100 @@ async def run_reporter(
     reinjury_risk: ReinjuryRiskOutput,
     db: AsyncSession,
 ) -> ReporterOutput:
+    pose_coverage = get_pose_data_coverage(pose)
+    pose_data_sufficient = pose_has_sufficient_data(pose)
+
+    if not pose_data_sufficient:
+        pain_avg = (
+            sum(intake.normalized_pain_scores.values()) / len(intake.normalized_pain_scores)
+            if intake.normalized_pain_scores else 0.0
+        )
+        coverage_notes = list(pose_coverage.get("notes", []))
+        coverage_notes.append("report generation skipped because pose data was insufficient")
+        if not reinjury_risk.data_sufficient:
+            coverage_notes.append("reinjury trend data insufficient")
+
+        output = ReporterOutput(
+            summary=(
+                "Insufficient pose data to generate a grounded PT session report. "
+                "Capture numeric pose frames for this session and rerun the pipeline."
+            ),
+            session_highlights=[],
+            recommendations=["Capture a session with numeric pose frames before generating the report."],
+            evidence_map={"data_quality": coverage_notes},
+            reportability="insufficient_data",
+            data_coverage={
+                "required_fields_present": False,
+                "missing_fields": pose_coverage.get("missing_fields", []),
+                "notes": coverage_notes,
+            },
+        )
+
+        await hipaa_wrap(
+            content=json.dumps(output.model_dump()),
+            actor="reporter_agent",
+            patient_id=patient_id,
+            data_type="reporter_output",
+            db=db,
+        )
+
+        summary_row = Summary(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            agent_name="reporter",
+            content=output.summary,
+            created_at=datetime.utcnow(),
+        )
+        db.add(summary_row)
+
+        score_result = await db.execute(select(SessionScore).where(SessionScore.session_id == session_id))
+        score_row = score_result.scalars().first()
+        if score_row:
+            score_row.pain_score = pain_avg
+            score_row.rom_score = None
+        else:
+            db.add(SessionScore(
+                id=str(uuid.uuid4()),
+                session_id=session_id,
+                pain_score=pain_avg,
+                rom_score=None,
+                created_at=datetime.utcnow(),
+            ))
+        await db.flush()
+
+        upstream = []
+        for agent_name in ("fall_risk_agent", "reinjury_risk_agent"):
+            aid = await get_artifact_id(session_id, agent_name, db)
+            if aid:
+                upstream.append(aid)
+
+        await write_artifact(
+            agent_name="reporter_agent",
+            session_id=session_id,
+            patient_id=patient_id,
+            artifact_kind="reporter_output",
+            artifact_json={
+                "metrics": {
+                    "session_id": session_id,
+                    "summary": output.summary,
+                    "session_highlights": output.session_highlights,
+                    "recommendations": output.recommendations,
+                    "fall_risk_score": None,
+                    "reinjury_risk_score": None,
+                    "rom_score": None,
+                    "pain_avg": round(pain_avg, 2),
+                    "evidence_map": output.evidence_map,
+                    "reportability": output.reportability,
+                }
+            },
+            upstream_artifact_ids=upstream,
+            data_coverage=output.data_coverage,
+            db=db,
+        )
+
+        await write_audit("reporter_agent", "generate_report", patient_id, "session_report", db)
+        return output
+
     result = await db.execute(
         select(Summary)
         .join(Session, Summary.session_id == Session.id)
@@ -181,7 +276,7 @@ Output only valid JSON."""
                 "rom_score": pose.rom_score,
                 "pain_avg": round(pain_avg, 2),
                 "evidence_map": evidence_map,
-                "reportability": "reportable",
+                "reportability": output.reportability,
             }
         },
         upstream_artifact_ids=upstream,

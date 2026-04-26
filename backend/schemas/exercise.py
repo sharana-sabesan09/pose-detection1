@@ -103,6 +103,18 @@ class ExerciseResult(BaseModel):
     frameFeaturesCsv: Optional[str] = None
     framesCsv: Optional[str] = None
     sessionMetadata: Optional[SessionMetadata] = None
+    calibrationBatchId: Optional[str] = None
+    calibrationStep: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validate_calibration_fields(self) -> Self:
+        has_batch = self.calibrationBatchId is not None
+        has_step = self.calibrationStep is not None
+        if has_batch != has_step:
+            raise ValueError("calibrationBatchId and calibrationStep must be provided together")
+        if self.calibrationStep is not None and not 1 <= self.calibrationStep <= 4:
+            raise ValueError("calibrationStep must be 1..4")
+        return self
 
 
 class ExerciseResponse(BaseModel):

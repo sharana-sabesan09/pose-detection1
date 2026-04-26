@@ -1,3 +1,4 @@
+from datetime import datetime
 from pydantic import BaseModel
 
 
@@ -8,6 +9,7 @@ class IntakeInput(BaseModel):
     pain_scores: dict
     user_input: str
     session_type: str = "treatment"  # "assessment" | "treatment" | "home_exercise_check"
+    ended_at: datetime | None = None
 
 
 class IntakeOutput(BaseModel):
@@ -29,6 +31,8 @@ class PoseAnalysisOutput(BaseModel):
     flagged_joints: list[str]
     frame_count: int = 0
     joint_coverage: dict = {}  # {joint_name: frame_count}
+    data_sufficient: bool = False
+    data_coverage: dict = {}
 
 
 class FallRiskOutput(BaseModel):

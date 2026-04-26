@@ -34,6 +34,7 @@ class SessionFact:
     data_sufficient: bool          # from reinjury artifact
     reporter_summary: str
     evidence_map: dict             # from reporter artifact
+    artifact_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -46,6 +47,7 @@ class PatientTimeline:
 @dataclass
 class SalienceReport:
     salient_session_ids: list[str]
+    salient_artifact_ids: list[str]
     salient_metrics: dict          # {metric_name: {direction, values, delta_vs_baseline, session_ids, score_range}}
     salient_summaries: list[str]   # reporter summary text for salient sessions only
     data_warnings: list[str]
@@ -71,12 +73,12 @@ async def build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTi
     injured_joints: list[str] = meta.get("injured_joints", [])
     rehab_phase: str = meta.get("rehab_phase", "unknown")
 
-    # Session scores indexed by session_id (keep earliest per session)
+    # Session scores indexed by session_id (keep latest per session)
     scores_result = await db.execute(
         select(SessionScore)
         .join(Session, SessionScore.session_id == Session.id)
         .where(Session.patient_id == patient_id)
-        .order_by(SessionScore.created_at.asc())
+        .order_by(SessionScore.created_at.desc())
     )
     scores_by_session: dict[str, SessionScore] = {}
     for row in scores_result.scalars().all():
@@ -87,20 +89,26 @@ async def build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTi
         select(AgentArtifact)
         .where(
             AgentArtifact.patient_id == patient_id,
-            AgentArtifact.agent_name.in_(["intake_agent", "pose_analysis_agent", "reinjury_risk_agent", "reporter_agent"]),
+            AgentArtifact.agent_name.in_([
+                "intake_agent",
+                "pose_analysis_agent",
+                "fall_risk_agent",
+                "reinjury_risk_agent",
+                "reporter_agent",
+            ]),
         )
-        .order_by(AgentArtifact.created_at.asc())
+        .order_by(AgentArtifact.created_at.desc())
     )
     artifacts_by_key: dict[tuple[str, str], AgentArtifact] = {}
     for row in artifacts_result.scalars().all():
         if row.session_id:
-            artifacts_by_key[(row.session_id, row.agent_name)] = row
+            artifacts_by_key.setdefault((row.session_id, row.agent_name), row)
 
     # Reporter summaries indexed by session_id
     summaries_result = await db.execute(
         select(Summary)
         .where(Summary.session_id.in_(session_ids), Summary.agent_name == "reporter")
-        .order_by(Summary.created_at.asc())
+        .order_by(Summary.created_at.desc())
     )
     summary_by_session: dict[str, str] = {}
     for row in summaries_result.scalars().all():
@@ -146,10 +154,17 @@ async def build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTi
         if reinjury_art:
             data_sufficient = reinjury_art.artifact_json.get("metrics", {}).get("data_sufficient", False)
 
+        fall_art = artifacts_by_key.get((sid, "fall_risk_agent"))
         reporter_art = artifacts_by_key.get((sid, "reporter_agent"))
         evidence_map: dict = {}
         if reporter_art:
             evidence_map = reporter_art.artifact_json.get("metrics", {}).get("evidence_map", {})
+
+        artifact_ids = [
+            art.id
+            for art in (intake_art, pose_art, fall_art, reinjury_art, reporter_art)
+            if art
+        ]
 
         facts.append(SessionFact(
             session_id=sid,
@@ -162,6 +177,7 @@ async def build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTi
             data_sufficient=data_sufficient,
             reporter_summary=summary_by_session.get(sid, ""),
             evidence_map=evidence_map,
+            artifact_ids=artifact_ids,
         ))
 
     return PatientTimeline(sessions=facts, injured_joints=injured_joints, rehab_phase=rehab_phase)
@@ -171,6 +187,7 @@ def compute_salience(timeline: PatientTimeline) -> SalienceReport:
     if not timeline.sessions:
         return SalienceReport(
             salient_session_ids=[],
+            salient_artifact_ids=[],
             salient_metrics={},
             salient_summaries=[],
             data_warnings=[],
@@ -178,6 +195,7 @@ def compute_salience(timeline: PatientTimeline) -> SalienceReport:
         )
 
     salient_session_ids: list[str] = []
+    salient_artifact_ids: list[str] = []
     salient_metrics: dict = {}
     data_warnings: list[str] = []
     why_selected: dict[str, list[str]] = {}
@@ -186,6 +204,18 @@ def compute_salience(timeline: PatientTimeline) -> SalienceReport:
         if sid not in salient_session_ids:
             salient_session_ids.append(sid)
         why_selected.setdefault(sid, []).append(reason)
+
+    def _higher_is_better(metric_name: str) -> bool:
+        if metric_name.startswith("joint_rom_"):
+            return True
+        return metric_name not in {"fall_risk_score", "reinjury_risk_score", "pain_score"}
+
+    def _direction_to_label(metric_name: str, delta: float) -> str:
+        if delta == 0:
+            return "stable"
+        if _higher_is_better(metric_name):
+            return "improving" if delta > 0 else "worsening"
+        return "improving" if delta < 0 else "worsening"
 
     # Assessment sessions are baseline anchors — mark them but exclude from delta calculations
     for fact in timeline.sessions:
@@ -250,13 +280,14 @@ def compute_salience(timeline: PatientTimeline) -> SalienceReport:
 
         trend_label = None
         if consecutive >= 2 and direction:
-            trend_label = "improving" if direction == "up" else "worsening"
+            trend_label = _direction_to_label(metric_name, 1.0 if direction == "up" else -1.0)
 
         if salient_sids or trend_label:
+            overall_delta = values[-1] - values[0]
             salient_metrics[metric_name] = {
-                "direction": trend_label or ("improving" if values[-1] > values[0] else "worsening"),
+                "direction": trend_label or _direction_to_label(metric_name, overall_delta),
                 "values": [(sid, round(v, 2)) for sid, v in series],
-                "delta_vs_baseline": round(values[-1] - values[0], 2),
+                "delta_vs_baseline": round(overall_delta, 2),
                 "session_ids": salient_sids,
                 "score_range": round(score_range, 2),
             }
@@ -270,6 +301,13 @@ def compute_salience(timeline: PatientTimeline) -> SalienceReport:
     # Always include the most recent session
     if timeline.sessions:
         _add_salient(timeline.sessions[-1].session_id, "most recent session")
+
+    for fact in timeline.sessions:
+        if fact.session_id not in salient_session_ids:
+            continue
+        for artifact_id in fact.artifact_ids:
+            if artifact_id not in salient_artifact_ids:
+                salient_artifact_ids.append(artifact_id)
 
     # Data warnings
     for fact in timeline.sessions:
@@ -289,6 +327,7 @@ def compute_salience(timeline: PatientTimeline) -> SalienceReport:
 
     return SalienceReport(
         salient_session_ids=salient_session_ids,
+        salient_artifact_ids=salient_artifact_ids,
         salient_metrics=salient_metrics,
         salient_summaries=salient_summaries,
         data_warnings=data_warnings,

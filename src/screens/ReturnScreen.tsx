@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import {
@@ -14,6 +14,12 @@ import {
   SketchInput,
 } from '../sentinel/primitives';
 import { COLORS, FONTS } from '../sentinel/theme';
+import {
+  flushPendingPtSessionQueue,
+  loadPtSessionSyncDraft,
+  PtSessionSyncDraft,
+  queuePtSessionSync,
+} from '../engine/ptSessionSync';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Return'>;
 
@@ -27,8 +33,12 @@ type ReturnData = {
 
 const FEEDBACK_STORAGE_KEY = 'sentinel_last_session_feedback';
 
-export default function ReturnScreen({ navigation }: Props) {
+export default function ReturnScreen({ navigation, route }: Props) {
+  const draftId = route.params?.draftId;
   const [step, setStep] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [syncDraft, setSyncDraft] = useState<PtSessionSyncDraft | null>(null);
   const [data, setData] = useState<ReturnData>({
     session_type: 'treatment',
     overall_feel: null,
@@ -36,6 +46,34 @@ export default function ReturnScreen({ navigation }: Props) {
     pt_plan: '',
     notes: '',
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!draftId) {
+      setSyncDraft(null);
+      setDraftLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setDraftLoading(true);
+    loadPtSessionSyncDraft(draftId)
+      .then(draft => {
+        if (!cancelled) setSyncDraft(draft);
+      })
+      .catch(e => {
+        console.warn('[ReturnScreen] PT sync draft load failed:', (e as Error).message);
+        if (!cancelled) setSyncDraft(null);
+      })
+      .finally(() => {
+        if (!cancelled) setDraftLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draftId]);
 
   const setPatch = (patch: Partial<ReturnData>) => {
     setData(current => ({ ...current, ...patch }));
@@ -49,11 +87,60 @@ export default function ReturnScreen({ navigation }: Props) {
   };
 
   const finish = async () => {
-    await AsyncStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify({
-      ...data,
-      savedAt: new Date().toISOString(),
-    }));
-    navigation.navigate('Home');
+    if (saving || draftLoading) return;
+    setSaving(true);
+    try {
+      await AsyncStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify({
+        ...data,
+        savedAt: new Date().toISOString(),
+        draftId: draftId ?? null,
+      }));
+
+      if (!syncDraft) {
+        navigation.navigate('Home');
+        return;
+      }
+
+      const painScores = Object.fromEntries(
+        Object.entries(data.pain)
+          .filter(([, value]) => Number.isFinite(value) && value > 0)
+          .map(([joint, value]) => [joint, Math.max(0, Math.min(10, Math.round(value)))]),
+      );
+      const notes = data.notes.trim();
+      const userInput = [
+        data.overall_feel ? `Overall feel: ${data.overall_feel}.` : '',
+        notes,
+      ]
+        .filter(Boolean)
+        .join(' ') || 'No additional notes.';
+
+      await queuePtSessionSync(syncDraft, {
+        sessionType: data.session_type,
+        painScores,
+        ptPlan: data.pt_plan.trim(),
+        userInput,
+      });
+
+      const flushResult = await flushPendingPtSessionQueue();
+      if (flushResult.failed === 0) {
+        Alert.alert(
+          'Check-in synced',
+          'The session end record was saved to the backend.',
+          [{ text: 'OK', onPress: () => navigation.navigate('Home') }],
+        );
+        return;
+      }
+
+      Alert.alert(
+        'Saved locally',
+        'The session end record was saved on this device. Any unfinished backend syncs will retry automatically.',
+        [{ text: 'OK', onPress: () => navigation.navigate('Home') }],
+      );
+    } catch (e) {
+      Alert.alert('Save failed', (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (step === 0) {
@@ -234,8 +321,23 @@ export default function ReturnScreen({ navigation }: Props) {
           </Text>
         </SketchBox>
 
-        <InkButton label="Save check-in" onPress={finish} style={styles.fullButton} />
-        <Text style={styles.footerText}>saved on this device</Text>
+        <InkButton
+          label={
+            saving
+              ? 'Saving...'
+              : draftLoading
+                ? 'Loading session...'
+                : 'Save check-in'
+          }
+          onPress={finish}
+          style={styles.fullButton}
+          disabled={saving || draftLoading}
+        />
+        <Text style={styles.footerText}>
+          {syncDraft
+            ? 'saved locally first, then synced or queued for retry'
+            : 'saved on this device'}
+        </Text>
       </ScrollView>
     </View>
   );
