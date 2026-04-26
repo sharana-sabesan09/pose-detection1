@@ -217,36 +217,45 @@ async def store_exercise_result(
     db: AsyncSession = Depends(get_db),
     _user=Depends(require_jwt),
 ):
+    patient_id = getattr(body, "patientId", None)
+    visit_id = getattr(body, "visitId", None) or body.sessionId
+    injured_joint_rom_model = getattr(body, "injuredJointRom", None)
+    session_metadata_model = getattr(body, "sessionMetadata", None)
+    reps_csv = getattr(body, "repsCsv", None)
+    frame_features_csv = getattr(body, "frameFeaturesCsv", None)
+    frames_csv = getattr(body, "framesCsv", None)
+    calibration_batch_id = getattr(body, "calibrationBatchId", None)
+    calibration_step = getattr(body, "calibrationStep", None)
+
     existing = await db.execute(
         select(Exercise).where(Exercise.mobile_exercise_id == body.sessionId)
     )
     if existing.scalars().first():
         raise HTTPException(status_code=409, detail="Session already stored")
 
-    await _ensure_patient_exists(body.patientId, db)
+    await _ensure_patient_exists(patient_id, db)
 
     # Companion Session row so PoseFrame records (raw frames) have somewhere
     # to live and pose_analysis_agent can read them through the normal path.
     # patient_id may be None for anonymous exercise sessions.
     linked_session = Session(
         id=str(uuid.uuid4()),
-        patient_id=body.patientId,
+        patient_id=patient_id,
         started_at=datetime.utcfromtimestamp(body.startedAtMs / 1000),
         ended_at=datetime.utcfromtimestamp(body.endedAtMs / 1000),
     )
     db.add(linked_session)
     await db.flush()
 
-    # Older mobile builds may not send visitId yet. Fall back to sessionId so
-    # legacy uploads still get a non-null value (each row becomes its own
-    # one-row visit, matching today's behaviour) while new uploads share a
-    # real visit_id across the visit.
-    visit_id = body.visitId or body.sessionId
-    injured_joint_rom = body.injuredJointRom.model_dump() if body.injuredJointRom else None
+    # Tolerate mixed router/schema deployments: optional fields may be absent on
+    # the parsed model during a rolling deploy, but uploads should still store.
+    injured_joint_rom = (
+        injured_joint_rom_model.model_dump() if injured_joint_rom_model else None
+    )
 
     exercise_row = Exercise(
         id=str(uuid.uuid4()),
-        patient_id=body.patientId,
+        patient_id=patient_id,
         mobile_exercise_id=body.sessionId,
         exercise=body.exercise,
         num_reps=body.numReps,
@@ -254,12 +263,12 @@ async def store_exercise_result(
         ended_at_ms=body.endedAtMs,
         duration_ms=body.durationMs,
         summary_json=body.summary.summary.model_dump(),
-        metadata_json=body.sessionMetadata.model_dump() if body.sessionMetadata else None,
-        reps_csv=body.repsCsv,
-        frame_features_csv=body.frameFeaturesCsv,
-        frames_csv=body.framesCsv,
-        calibration_batch_id=body.calibrationBatchId,
-        calibration_step=body.calibrationStep,
+        metadata_json=session_metadata_model.model_dump() if session_metadata_model else None,
+        reps_csv=reps_csv,
+        frame_features_csv=frame_features_csv,
+        frames_csv=frames_csv,
+        calibration_batch_id=calibration_batch_id,
+        calibration_step=calibration_step,
         linked_session_id=linked_session.id,
         visit_id=visit_id,
         injured_joint_rom=injured_joint_rom,
@@ -302,8 +311,8 @@ async def store_exercise_result(
             confidence=rep.confidence,
         ))
 
-    if body.frameFeaturesCsv:
-        for fr in parse_frame_features_csv(body.frameFeaturesCsv):
+    if frame_features_csv:
+        for fr in parse_frame_features_csv(frame_features_csv):
             db.add(PoseFrame(
                 id=str(uuid.uuid4()),
                 session_id=linked_session.id,
@@ -312,8 +321,8 @@ async def store_exercise_result(
             ))
 
     # Optional raw landmarks CSV (used for overlay rendering / debugging).
-    if body.framesCsv:
-        for fr in parse_landmarks_csv(body.framesCsv):
+    if frames_csv:
+        for fr in parse_landmarks_csv(frames_csv):
             db.add(PoseFrame(
                 id=str(uuid.uuid4()),
                 session_id=linked_session.id,
@@ -329,7 +338,7 @@ async def store_exercise_result(
     # Fire the exercise pipeline as a background task — returns 201 immediately,
     # agents run concurrently without blocking the mobile app.
     asyncio.create_task(
-        run_exercise_pipeline(body, linked_session_id, body.patientId)
+        run_exercise_pipeline(body, linked_session_id, patient_id)
     )
 
     return ExerciseResponse(

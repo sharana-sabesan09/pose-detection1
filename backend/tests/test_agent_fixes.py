@@ -23,12 +23,14 @@ phi_scanner_stub.scan_and_redact = lambda text: (text, [])
 sys.modules.setdefault("utils.phi_scanner", phi_scanner_stub)
 
 from agents.fall_risk import run_fall_risk
+from agents.exercise_reporter import run_exercise_reporter
 from agents.pose_analysis import run_pose_analysis
 from agents.progress import run_progress
 from agents.progress_salience import build_patient_timeline, compute_salience
 from agents.reinjury_risk import run_reinjury_risk
 from agents.reporter import run_reporter
-from db.models import AccumulatedScore, AgentArtifact, Base, Patient, Session, SessionScore, Summary
+from db.models import AccumulatedScore, AgentArtifact, Base, Exercise, Patient, PoseFrame, Session, SessionScore, Summary
+from routers.sessions import _reporter_output_from_artifact
 from schemas.exercise import ExerciseResult
 from schemas.session import IntakeOutput
 
@@ -83,6 +85,78 @@ def _score(
         rom_score=rom,
         created_at=created_at,
     )
+
+
+def _exercise_payload(
+    *,
+    session_id: str,
+    visit_id: str,
+    patient_id: str,
+    num_reps: int = 1,
+) -> dict:
+    return {
+        "sessionId": session_id,
+        "visitId": visit_id,
+        "patientId": patient_id,
+        "startedAtMs": 1000,
+        "endedAtMs": 2000,
+        "durationMs": 1000,
+        "exercise": "squat",
+        "numReps": num_reps,
+        "summary": {
+            "exercise": "squat",
+            "reps": [
+                {
+                    "repId": 1,
+                    "side": "left",
+                    "timing": {
+                        "startFrame": 0,
+                        "bottomFrame": 5,
+                        "endFrame": 10,
+                        "durationMs": 500,
+                    },
+                    "features": {
+                        "kneeFlexionDeg": 90,
+                        "romRatio": 0.8,
+                        "fppaPeak": 5,
+                        "fppaAtDepth": 4,
+                        "trunkLeanPeak": 2,
+                        "trunkFlexPeak": 10,
+                        "pelvicDropPeak": 3,
+                        "pelvicShiftPeak": 1,
+                        "hipAdductionPeak": 2,
+                        "kneeOffsetPeak": 0.1,
+                        "swayNorm": 0.02,
+                        "smoothness": 0.9,
+                    },
+                    "errors": {
+                        "kneeValgus": False,
+                        "trunkLean": False,
+                        "trunkFlex": False,
+                        "pelvicDrop": False,
+                        "pelvicShift": False,
+                        "hipAdduction": False,
+                        "kneeOverFoot": False,
+                        "balance": False,
+                    },
+                    "score": {
+                        "totalErrors": 0,
+                        "classification": "good",
+                    },
+                    "confidence": 0.95,
+                }
+            ],
+            "summary": {
+                "numReps": num_reps,
+                "avgDepth": 0.8,
+                "minDepth": 0.7,
+                "avgFppa": 2.0,
+                "maxFppa": 5.0,
+                "consistency": 0.9,
+                "overallRating": "good",
+            },
+        },
+    }
 
 
 class AgentFixTests(unittest.IsolatedAsyncioTestCase):
@@ -191,6 +265,170 @@ class AgentFixTests(unittest.IsolatedAsyncioTestCase):
                 "pose_frames",
                 reporter_artifact.data_coverage_json["missing_fields"],
             )
+
+    async def test_pose_analysis_ignores_nonclinical_debug_fields_for_rom(self):
+        patient_id = "patient-pose-debug"
+        session_id = "session-pose-debug"
+
+        async with self.session_factory() as db:
+            db.add(Session(
+                id=session_id,
+                patient_id=patient_id,
+                started_at=datetime(2026, 4, 26, 12, 0, 0),
+            ))
+            db.add_all([
+                PoseFrame(
+                    id="pose-debug-1",
+                    session_id=session_id,
+                    timestamp=1000.0,
+                    angles_json={
+                        "knee_flex": 10.0,
+                        "midhip_x": 0.1,
+                        "midhip_y": 0.2,
+                        "velocity": 3.0,
+                    },
+                ),
+                PoseFrame(
+                    id="pose-debug-2",
+                    session_id=session_id,
+                    timestamp=2000.0,
+                    angles_json={
+                        "knee_flex": 40.0,
+                        "midhip_x": 50.0,
+                        "midhip_y": 60.0,
+                        "velocity": 100.0,
+                    },
+                ),
+            ])
+            await db.commit()
+
+            output = await run_pose_analysis(session_id, db, patient_id=patient_id)
+
+            self.assertIn("knee_flex", output.joint_stats)
+            self.assertNotIn("midhip_x", output.joint_stats)
+            self.assertNotIn("midhip_y", output.joint_stats)
+            self.assertNotIn("velocity", output.joint_stats)
+            self.assertGreater(output.rom_score, 0.0)
+            joined_notes = " ".join(output.data_coverage["notes"])
+            self.assertIn("ignored non-clinical frame fields", joined_notes)
+
+    async def test_build_patient_timeline_uses_exercise_injured_joint_rom(self):
+        patient_id = "patient-exercise-rom"
+        session_id = "exercise-linked-session"
+
+        async with self.session_factory() as db:
+            db.add(Patient(
+                id=patient_id,
+                metadata_json={"injured_joints": ["right_knee"], "rehab_phase": "functional"},
+            ))
+            db.add(Session(
+                id=session_id,
+                patient_id=patient_id,
+                started_at=datetime(2026, 4, 20, 9, 0, 0),
+            ))
+            db.add(Exercise(
+                id="exercise-row-rom",
+                patient_id=patient_id,
+                mobile_exercise_id="mobile-exercise-rom",
+                exercise="squat",
+                num_reps=1,
+                started_at_ms=1000,
+                ended_at_ms=2000,
+                duration_ms=1000,
+                linked_session_id=session_id,
+                visit_id="visit-rom",
+                injured_joint_rom={"joint": "right_knee", "rom": 72.5},
+                created_at=datetime(2026, 4, 20, 9, 5, 0),
+            ))
+            await db.commit()
+
+            timeline = await build_patient_timeline(patient_id, db)
+            fact = timeline.sessions[0]
+
+            self.assertEqual(fact.source_type, "exercise_session")
+            self.assertEqual(fact.injured_joint_rom, {"right_knee": 72.5})
+
+    async def test_exercise_reporter_reads_stored_metadata_and_surfaces_quality_fields(self):
+        patient_id = "patient-exercise-report"
+        session_id = "exercise-report-session"
+        exercise_payload = _exercise_payload(
+            session_id="mobile-exercise-report",
+            visit_id="visit-exercise-report",
+            patient_id=patient_id,
+        )
+        result = ExerciseResult(**exercise_payload)
+
+        async with self.session_factory() as db:
+            db.add(Session(
+                id=session_id,
+                patient_id=patient_id,
+                started_at=datetime(2026, 4, 22, 8, 0, 0),
+            ))
+            db.add(Exercise(
+                id="exercise-row-report",
+                patient_id=patient_id,
+                mobile_exercise_id=result.sessionId,
+                exercise=result.exercise,
+                num_reps=result.numReps,
+                started_at_ms=result.startedAtMs,
+                ended_at_ms=result.endedAtMs,
+                duration_ms=result.durationMs,
+                linked_session_id=session_id,
+                visit_id=result.visitId,
+                metadata_json={
+                    "voice": {
+                        "derived": {
+                            "painScore": 4.0,
+                            "painLocations": ["hip"],
+                            "sessionGoals": ["strength"],
+                            "subjectiveSummary": "Felt mild hip tightness today.",
+                            "affectedSide": "right",
+                        }
+                    }
+                },
+                injured_joint_rom={"joint": "right_knee", "rom": 81.2},
+                created_at=datetime(2026, 4, 22, 8, 1, 0),
+            ))
+            await db.commit()
+
+            identity_wrap = AsyncMock(side_effect=lambda **kwargs: kwargs["content"])
+            rag_result = SimpleNamespace(hit_count=0, context="", sources=[])
+            llm_payload = {
+                "summary": "Exercise report grounded in stored metadata.",
+                "session_highlights": ["Depth was consistent."],
+                "recommendations": ["Continue controlled squats."],
+            }
+
+            with (
+                patch("agents.exercise_reporter.retrieve_clinical_context", new=AsyncMock(return_value=rag_result)),
+                patch("agents.exercise_reporter._client.chat.completions.create", new=AsyncMock(return_value=_llm_response(llm_payload))),
+                patch("agents.exercise_reporter.hipaa_wrap", new=identity_wrap),
+            ):
+                output = await run_exercise_reporter(result, session_id, patient_id, db)
+                await db.commit()
+
+            self.assertEqual(output.good_reps, 1)
+            self.assertEqual(output.filtered_reps, 0)
+
+            reporter_artifact = (
+                await db.execute(
+                    select(AgentArtifact).where(
+                        AgentArtifact.session_id == session_id,
+                        AgentArtifact.agent_name == "reporter_agent",
+                    )
+                )
+            ).scalars().one()
+
+            metrics = reporter_artifact.artifact_json["metrics"]
+            self.assertEqual(metrics["good_reps"], 1)
+            self.assertEqual(metrics["filtered_reps"], 0)
+            self.assertIn("subjective_section", metrics["evidence_map"])
+            self.assertIn("injured_joint_section", metrics["evidence_map"])
+
+            mapped_output = _reporter_output_from_artifact(reporter_artifact)
+            assert mapped_output is not None
+            self.assertEqual(mapped_output.good_reps, 1)
+            self.assertEqual(mapped_output.filtered_reps, 0)
 
     async def test_salience_uses_latest_per_session_rows_and_correct_metric_direction(self):
         patient_id = "patient-salience"

@@ -30,6 +30,44 @@ def _discard_task(coro):
     return None
 
 
+def _exercise_payload(session_id: str, **overrides):
+    payload = {
+        "sessionId": session_id,
+        "visitId": f"{session_id}-visit",
+        "injuredJointRom": {"joint": "right_knee", "rom": 0.75},
+        "startedAtMs": 1000,
+        "endedAtMs": 2000,
+        "durationMs": 1000,
+        "exercise": "squat",
+        "numReps": 0,
+        "summary": {
+            "exercise": "squat",
+            "reps": [],
+            "summary": {
+                "numReps": 0,
+                "avgDepth": 0,
+                "minDepth": 0,
+                "avgFppa": 0,
+                "maxFppa": 0,
+                "consistency": 0,
+                "overallRating": "insufficient",
+            },
+        },
+        "patientId": "patient-voice-test",
+        "repsCsv": "rep_id,score\n1,good\n",
+        "frameFeaturesCsv": (
+            "timestamp,knee_flex,fppa,trunk_lean,trunk_flex,pelvic_drop,"
+            "hip_adduction,knee_offset,midhip_x,midhip_y,velocity\n"
+            "0,10,20,30,40,50,60,70,80,90,100\n"
+        ),
+        "framesCsv": "t,mode,lm0_x,lm0_y,lm0_z,lm0_v\n0,squat,0.1,0.2,0.3,0.9\n",
+        "calibrationBatchId": "batch-1",
+        "calibrationStep": 2,
+    }
+    payload.update(overrides)
+    return payload
+
+
 class VoiceMetadataTests(unittest.IsolatedAsyncioTestCase):
     async def test_extracts_voice_metadata_from_transcript(self):
         normalized, metadata = build_session_metadata_from_voice(
@@ -70,71 +108,11 @@ class VoiceMetadataTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(normalized.startswith("Right hip pain"))
 
         body = ExerciseResult.model_validate(
-            {
-                "sessionId": "voice-metadata-test-session",
-                "visitId": "visit-voice-metadata-test",
-                "injuredJointRom": {"joint": "right_knee", "rom": 0.75},
-                "startedAtMs": 1000,
-                "endedAtMs": 2000,
-                "durationMs": 1000,
-                "exercise": "squat",
-                "numReps": 1,
-                "summary": {
-                    "exercise": "squat",
-                    "reps": [
-                        {
-                            "repId": 1,
-                            "side": "right",
-                            "timing": {
-                                "startFrame": 1,
-                                "bottomFrame": 2,
-                                "endFrame": 3,
-                                "durationMs": 500,
-                            },
-                            "features": {
-                                "kneeFlexionDeg": 90.0,
-                                "romRatio": 0.75,
-                                "fppaPeak": 20.0,
-                                "fppaAtDepth": 15.0,
-                                "trunkLeanPeak": 10.0,
-                                "trunkFlexPeak": 25.0,
-                                "pelvicDropPeak": 4.0,
-                                "pelvicShiftPeak": 0.05,
-                                "hipAdductionPeak": 8.0,
-                                "kneeOffsetPeak": 0.2,
-                                "swayNorm": 0.01,
-                                "smoothness": 100.0,
-                            },
-                            "errors": {
-                                "kneeValgus": False,
-                                "trunkLean": False,
-                                "trunkFlex": False,
-                                "pelvicDrop": False,
-                                "pelvicShift": False,
-                                "hipAdduction": False,
-                                "kneeOverFoot": False,
-                                "balance": False,
-                            },
-                            "score": {
-                                "totalErrors": 0,
-                                "classification": "good",
-                            },
-                            "confidence": 0.95,
-                        }
-                    ],
-                    "summary": {
-                        "numReps": 1,
-                        "avgDepth": 90.0,
-                        "minDepth": 90.0,
-                        "avgFppa": 20.0,
-                        "maxFppa": 20.0,
-                        "consistency": 1.0,
-                        "overallRating": "good",
-                    },
-                },
-                "patientId": "patient-voice-test",
-                "sessionMetadata": metadata.model_dump(),
-            }
+            _exercise_payload(
+                "voice-metadata-test-session",
+                visitId="visit-voice-metadata-test",
+                sessionMetadata=metadata.model_dump(),
+            )
         )
 
         async with session_factory() as db:
@@ -161,6 +139,55 @@ class VoiceMetadataTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored.metadata_json["voice"]["derived"]["painScore"], 4.0)
         self.assertEqual(stored.metadata_json["voice"]["derived"]["painLocations"], ["hip"])
         self.assertEqual(stored.metadata_json["voice"]["derived"]["sessionGoals"], ["strength"])
+
+    async def test_store_exercise_result_tolerates_missing_optional_attrs(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        body = ExerciseResult.model_validate(
+            _exercise_payload("exercise-missing-attrs")
+        )
+        for attr in (
+            "visitId",
+            "injuredJointRom",
+            "sessionMetadata",
+            "repsCsv",
+            "frameFeaturesCsv",
+            "framesCsv",
+            "calibrationBatchId",
+            "calibrationStep",
+        ):
+            delattr(body, attr)
+
+        async with session_factory() as db:
+            with patch("routers.sessions.asyncio.create_task", side_effect=_discard_task):
+                response = await store_exercise_result(
+                    body,
+                    db=db,
+                    _user={"user_id": "test", "role": "admin"},
+                )
+
+            stored = (
+                await db.execute(
+                    select(Exercise).where(
+                        Exercise.mobile_exercise_id == "exercise-missing-attrs"
+                    )
+                )
+            ).scalars().one()
+
+        self.assertEqual(response.sessionId, "exercise-missing-attrs")
+        self.assertEqual(response.visitId, "exercise-missing-attrs")
+        self.assertEqual(stored.visit_id, "exercise-missing-attrs")
+        self.assertIsNone(stored.injured_joint_rom)
+        self.assertIsNone(stored.metadata_json)
+        self.assertIsNone(stored.reps_csv)
+        self.assertIsNone(stored.frame_features_csv)
+        self.assertIsNone(stored.frames_csv)
+        self.assertIsNone(stored.calibration_batch_id)
+        self.assertIsNone(stored.calibration_step)
 
     async def test_multi_exercise_archive_idempotent(self):
         engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)

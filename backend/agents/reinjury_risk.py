@@ -75,13 +75,32 @@ def _compute_trend(rom_values: list[float]) -> str:
 
 
 async def _get_injured_joints(patient_id: str, db: AsyncSession) -> list[str]:
-    """Return injured_joints from metadata_json, or fall back to union of flagged_joints."""
+    """Return injured_joints from metadata_json, then stored exercise ROM, then flagged_joints."""
     patient_result = await db.execute(select(Patient).where(Patient.id == patient_id))
     patient = patient_result.scalars().first()
     if patient and patient.metadata_json:
         joints = patient.metadata_json.get("injured_joints", [])
         if joints:
             return joints
+
+    exercise_result = await db.execute(
+        select(Exercise.injured_joint_rom)
+        .where(
+            Exercise.patient_id == patient_id,
+            Exercise.injured_joint_rom.is_not(None),
+        )
+        .order_by(Exercise.created_at.desc())
+        .limit(3)
+    )
+    exercise_joint_union: list[str] = []
+    for injured_joint_rom in exercise_result.scalars().all():
+        if not injured_joint_rom:
+            continue
+        joint_name = injured_joint_rom.get("joint")
+        if joint_name and joint_name not in exercise_joint_union:
+            exercise_joint_union.append(joint_name)
+    if exercise_joint_union:
+        return exercise_joint_union
 
     # Fallback: union of flagged_joints from last 3 pose artifacts
     artifacts_result = await db.execute(
@@ -123,23 +142,10 @@ async def run_reinjury_risk(
         .order_by(AgentArtifact.created_at.desc())
         .limit(5)
     )
-    pose_artifacts = list(reversed(pose_artifacts_result.scalars().all()))
+    pose_artifacts = pose_artifacts_result.scalars().all()
 
-    # Build per-joint ROM history (chronological)
-    joint_rom_history: dict[str, list[float]] = {}
-    pose_artifact_ids: list[str] = []
-    for art in pose_artifacts:
-        pose_artifact_ids.append(art.id)
-        joint_stats = art.artifact_json.get("metrics", {}).get("joint_stats", {})
-        for joint in injured_joints:
-            if joint in joint_stats and "rom" in joint_stats[joint]:
-                joint_rom_history.setdefault(joint, []).append(joint_stats[joint]["rom"])
-
-    # ── Query 2: RepAnalysis rows for exercise sessions ────────────────────────
-    rep_feature_context: dict[str, dict] = {}
+    ex_sessions: list[Exercise] = []
     if injured_joints:
-        # NOTE: visit_id is available on Exercise rows for future use — switching to
-        # .distinct(Exercise.visit_id) would give 5 visits instead of 5 exercises.
         ex_sessions_result = await db.execute(
             select(Exercise)
             .where(Exercise.patient_id == patient_id)
@@ -148,6 +154,74 @@ async def run_reinjury_risk(
         )
         ex_sessions = ex_sessions_result.scalars().all()
 
+    rom_events_by_session: dict[str, dict] = {}
+
+    def _merge_rom_event(
+        session_key: str,
+        created_at: datetime,
+        joint_values: dict[str, float],
+        pose_artifact_id: str | None = None,
+    ) -> None:
+        if not joint_values:
+            return
+        existing = rom_events_by_session.setdefault(
+            session_key,
+            {
+                "created_at": created_at,
+                "joint_values": {},
+                "pose_artifact_ids": [],
+            },
+        )
+        if created_at > existing["created_at"]:
+            existing["created_at"] = created_at
+        existing["joint_values"].update(joint_values)
+        if pose_artifact_id and pose_artifact_id not in existing["pose_artifact_ids"]:
+            existing["pose_artifact_ids"].append(pose_artifact_id)
+
+    # Build per-joint ROM history (chronological)
+    joint_rom_history: dict[str, list[float]] = {}
+    pose_artifact_ids: list[str] = []
+    for art in pose_artifacts:
+        joint_stats = art.artifact_json.get("metrics", {}).get("joint_stats", {})
+        joint_values = {
+            joint: float(joint_stats[joint]["rom"])
+            for joint in injured_joints
+            if joint in joint_stats and "rom" in joint_stats[joint]
+        }
+        _merge_rom_event(art.session_id or art.id, art.created_at, joint_values, pose_artifact_id=art.id)
+
+    for ex_session in ex_sessions:
+        injured_joint_rom = ex_session.injured_joint_rom or {}
+        joint_name = injured_joint_rom.get("joint")
+        rom_value = injured_joint_rom.get("rom")
+        if joint_name and rom_value is not None and joint_name in injured_joints:
+            _merge_rom_event(
+                ex_session.linked_session_id or ex_session.id,
+                ex_session.created_at,
+                {joint_name: float(rom_value)},
+            )
+
+    ordered_rom_events = sorted(
+        rom_events_by_session.values(),
+        key=lambda event: event["created_at"],
+        reverse=True,
+    )[:5]
+    ordered_rom_events.reverse()
+
+    joint_rom_history = {}
+    pose_artifact_ids = []
+    for event in ordered_rom_events:
+        for artifact_id in event["pose_artifact_ids"]:
+            if artifact_id not in pose_artifact_ids:
+                pose_artifact_ids.append(artifact_id)
+        for joint, rom_value in event["joint_values"].items():
+            joint_rom_history.setdefault(joint, []).append(rom_value)
+
+    # ── Query 2: RepAnalysis rows for exercise sessions ────────────────────────
+    rep_feature_context: dict[str, dict] = {}
+    if injured_joints:
+        # NOTE: visit_id is available on Exercise rows for future use — switching to
+        # .distinct(Exercise.visit_id) would give 5 visits instead of 5 exercises.
         for ex_session in ex_sessions:
             reps_result = await db.execute(
                 select(RepAnalysis).where(RepAnalysis.exercise_id == ex_session.id)
