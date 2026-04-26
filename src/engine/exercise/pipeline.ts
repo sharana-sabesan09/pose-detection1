@@ -25,10 +25,14 @@ import { updateWindowStats }      from './windowStats';
 import { detectRepRanges }        from './repDetector';
 import { aggregateRepFromFrames } from './repAggregator';
 import { buildSessionSummary }    from './session';
+import { ExercisePlugin }         from './exercises/plugin';
+import { evaluateSLS }            from './exercises/sls';
 
 export interface ExercisePipelineOptions {
   bufferMaxFrames?: number;
   windowSize?:      number;
+  /** Scoring plugin — defaults to SLS. Pass a different plugin for other exercises. */
+  plugin?:          ExercisePlugin;
 }
 
 export class ExercisePipeline {
@@ -40,6 +44,7 @@ export class ExercisePipeline {
 
   private readonly bufferMaxFrames: number;
   private readonly windowSize:      number;
+  private readonly plugin:          ExercisePlugin;
 
   constructor(
     private exerciseName: string = 'squat',
@@ -47,6 +52,7 @@ export class ExercisePipeline {
   ) {
     this.bufferMaxFrames = options.bufferMaxFrames ?? 90;
     this.windowSize      = options.windowSize      ?? 30;
+    this.plugin          = options.plugin          ?? evaluateSLS;
   }
 
   /**
@@ -80,7 +86,7 @@ export class ExercisePipeline {
     const reps = ranges
       .map((range, i) => {
         const slice = this.allFrames.slice(range.startIdx, range.endIdx + 1);
-        return aggregateRepFromFrames(slice, i + 1, range);
+        return aggregateRepFromFrames(slice, i + 1, range, this.plugin);
       })
       .filter((r): r is NonNullable<typeof r> =>
         r !== null && r.features.kneeFlexionDeg >= REP_THRESHOLDS.MIN_REP_DEPTH_DEG,

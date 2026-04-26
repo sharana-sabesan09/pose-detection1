@@ -275,6 +275,12 @@ export function computeFrameFeatures(
     }
   }
 
+  // ── Swing heel Y (raw screen space) ──────────────────────────────────────
+  // The swing side is the non-dominant leg. We use raw landmarks so the value
+  // is in screen-fraction [0,1] matching midHipY — easier to threshold.
+  const swingHeel = raw[dominantSide === 'left' ? LM.RIGHT_HEEL : LM.LEFT_HEEL];
+  const swingHeelY = swingHeel ? swingHeel.y : 0;
+
   return {
     timestamp,
     landmarks: normalized,
@@ -288,6 +294,7 @@ export function computeFrameFeatures(
     midHipX,
     midHipY,
     velocityKneeFlex,
+    swingHeelY,
     dominantSide,
     confidence:   dominantVis,
   };

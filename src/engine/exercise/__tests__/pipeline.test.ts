@@ -212,11 +212,13 @@ describe('exercise pipeline', () => {
   test('computeErrors / computeScore: counts thresholded errors', () => {
     const features: RepFeatureValues = {
       kneeFlexionDeg: 90, romRatio: 0.75,
-      fppaPeak: 12, fppaAtDepth: 11,       // > 8  → kneeValgus
+      fppaPeak: 12, fppaAtDepth: 11,        // > 7  → kneeValgus
       trunkLeanPeak: 15, trunkFlexPeak: 20, // > 10 → trunkLean
       pelvicDropPeak: 2, pelvicShiftPeak: 0.05,
       hipAdductionPeak: 3, kneeOffsetPeak: 0.10,
       swayNorm: 0.02, smoothness: 2.0,
+      pelvisVertDisplacement: 0.08,
+      swingHeelContactFrames: 0,
     };
     const e = computeErrors(features);
     const s = computeScore(e);
