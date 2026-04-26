@@ -17,8 +17,13 @@ import React, { useState, useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import IntakeScreen from './src/screens/IntakeScreen';
-import MainTabs from './src/navigation/MainTabs';
+import SentinelOnboardingScreen from './src/screens/SentinelOnboardingScreen';
+import HomeScreen from './src/screens/HomeScreen';
+import SessionScreen from './src/screens/SessionScreen';
+import MovementsScreen from './src/screens/MovementsScreen';
+import DoctorReviewScreen from './src/screens/DoctorReviewScreen';
+import ReturnScreen from './src/screens/ReturnScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
 import { loadStoredProfile } from './src/engine/profileStorage';
 
 /**
@@ -28,8 +33,13 @@ import { loadStoredProfile } from './src/engine/profileStorage';
  * 'Main'   — the bottom tab navigator (contains the live session + dashboard)
  */
 export type RootStackParamList = {
-  Intake: undefined;
-  Main:   undefined;
+  Onboarding: { mode?: 'edit' } | undefined;
+  Home: undefined;
+  Session: undefined;
+  Movements: undefined;
+  DoctorReview: undefined;
+  Return: undefined;
+  Profile: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -55,11 +65,16 @@ export default function App() {
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName={hasProfile ? 'Main' : 'Intake'}
+        initialRouteName={hasProfile ? 'Home' : 'Onboarding'}
         screenOptions={{ headerShown: false, animation: 'fade' }}
       >
-        <Stack.Screen name="Intake" component={IntakeScreen} />
-        <Stack.Screen name="Main"   component={MainTabs}     />
+        <Stack.Screen name="Onboarding" component={SentinelOnboardingScreen} />
+        <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="Session" component={SessionScreen} />
+        <Stack.Screen name="Movements" component={MovementsScreen} />
+        <Stack.Screen name="DoctorReview" component={DoctorReviewScreen} />
+        <Stack.Screen name="Return" component={ReturnScreen} />
+        <Stack.Screen name="Profile" component={ProfileScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

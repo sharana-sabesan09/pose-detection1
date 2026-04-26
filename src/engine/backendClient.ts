@@ -14,6 +14,12 @@ export interface PatientOverview {
     weightKg: number;
     bmi: number;
     demographicRiskScore: number;
+    injured_joints: string[];
+    injured_side: string;
+    rehab_phase: string;
+    diagnosis: string;
+    contraindications: string[];
+    restrictions: string[];
   } | null;
   created_at: string;
   updated_at: string;
@@ -104,6 +110,12 @@ export async function upsertPatientProfile(profile: UserProfile) {
       weightKg: profile.weightKg,
       bmi: profile.bmi,
       demographicRiskScore: profile.demographicRiskScore,
+      injured_joints: profile.injured_joints,
+      injured_side: profile.injured_side,
+      rehab_phase: profile.rehab_phase,
+      diagnosis: profile.diagnosis,
+      contraindications: profile.contraindications,
+      restrictions: profile.restrictions,
     },
   );
 }

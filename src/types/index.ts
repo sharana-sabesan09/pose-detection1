@@ -33,14 +33,41 @@
  *                        into every Overall Fall Risk score during the session.
  *                        0 = no demographic risk, 100 = maximum demographic risk.
  */
+export type InjuredSide = 'left' | 'right' | 'bilateral' | 'unknown';
+
+export type RehabPhase =
+  | 'acute'
+  | 'sub-acute'
+  | 'functional'
+  | 'return-to-sport'
+  | 'unknown';
+
+export interface PTRecordSummary {
+  id: string;
+  name: string;
+  pages: number;
+  added: string;
+}
+
 export interface UserProfile {
   patientId: string;
+  name?: string;
   age: number;
   gender: 'male' | 'female' | 'other';
   heightCm: number;
   weightKg: number;
   bmi: number;
   demographicRiskScore: number;
+  injured_joints: string[];
+  injured_side: InjuredSide;
+  rehab_phase: RehabPhase;
+  diagnosis: string;
+  contraindications: string[];
+  restrictions: string[];
+  doctorName?: string;
+  doctorEmail?: string;
+  ptRecords?: PTRecordSummary[];
+  ptRecordsNote?: string;
   backendProfileSyncedAt?: string;
 }
 

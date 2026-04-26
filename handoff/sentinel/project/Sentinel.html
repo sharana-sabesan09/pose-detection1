@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Sentinel — Hand-drawn rehab</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Kalam:wght@400;700&family=Patrick+Hand&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css" />
+<style>
+  body { background: #2b2520; min-height: 100vh; }
+  .stage {
+    min-height: 100vh; display: flex; flex-wrap: wrap; gap: 28px;
+    padding: 36px 28px 80px; justify-content: center; align-items: flex-start;
+  }
+  .row-label {
+    width: 100%; color: #d6c9a8; font-family: 'Caveat', cursive; font-size: 28px;
+    text-align: center; letter-spacing: 1px; margin: 8px 0 -10px;
+  }
+  .frame-wrap {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+  }
+  .frame-label { color: #d6c9a8; font-family: 'Kalam', cursive; font-size: 13px; opacity: 0.8; letter-spacing: 1px; }
+  .stage-title {
+    width: 100%; text-align: center; color: #f3ecdb;
+    font-family: 'Caveat', cursive; padding-top: 12px;
+  }
+  .stage-title h1 { font-size: 56px; margin: 0; transform: rotate(-1.5deg); }
+  .stage-title p { font-family: 'Kalam', cursive; font-size: 16px; opacity: 0.75; margin: 4px 0 0; }
+  .play-mode .frame-label { display: none; }
+  .play-mode .row-label { display: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="frames/ios-frame.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="sketch.jsx"></script>
+<script type="text/babel" src="onboarding.jsx"></script>
+<script type="text/babel" src="main.jsx"></script>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const SAMPLE_PROFILE = {
+  patientId: 'p_8a4f',
+  name: 'Maya',
+  age: 28, gender: 'female', heightCm: 168, weightKg: 63, bmi: 22.4,
+  injured_joints: ['knee_flexion', 'hip_flexion'],
+  injured_side: 'left',
+  rehab_phase: 'sub-acute',
+  diagnosis: 'ACL reconstruction (left)',
+  contraindications: ['Deep squat below 90°', 'Single-leg hop'],
+  restrictions: ['Knee flexion < 90°', 'Pain ≤ 3/10'],
+  doctorName: 'Dr. M. Adler', doctorEmail: 'm.adler@bch.org',
+};
+
+// One frame = one screen
+function Frame({ label, children, screenLabel }) {
+  return (
+    <div className="frame-wrap" data-screen-label={screenLabel}>
+      <IOSDevice width={390} height={780}>
+        {children}
+      </IOSDevice>
+      <div className="frame-label">{label}</div>
+    </div>
+  );
+}
+
+// Onboarding flow self-managing state
+function OnboardingDemo({ initialStep = 0 }) {
+  const [step, setStep] = useState(initialStep);
+  const [data, setData] = useState({});
+  const set = (p) => setData(d => ({ ...d, ...p }));
+  const next = () => setStep(s => Math.min(s+1, 8));
+  const back = () => setStep(s => Math.max(s-1, 0));
+  const skip = next; // skip behaves the same — advance
+  const screens = [
+    <ScreenWelcome onNext={next} />,
+    <ScreenDemographics data={data} set={set} onNext={next} onBack={back} />,
+    <ScreenPTRecords data={data} set={set} onNext={next} onBack={back} onSkip={skip} />,
+    <ScreenInjuredJoints data={data} set={set} onNext={next} onBack={back} />,
+    <ScreenInjuredSide data={data} set={set} onNext={next} onBack={back} />,
+    <ScreenRehabPhase data={data} set={set} onNext={next} onBack={back} />,
+    <ScreenClinicalTalk data={data} set={set} onNext={next} onBack={back} onSkip={skip} />,
+    <ScreenDoctor data={data} set={set} onNext={next} onBack={back} />,
+  ];
+  return screens[Math.min(step, screens.length-1)];
+}
+
+// Wrapper with prefilled state for screens that need data
+function StaticScreen({ which, profile = SAMPLE_PROFILE }) {
+  const noop = () => {};
+  const [d, setD] = useState({
+    age: '28', gender: 'female', heightCm: '168', weightKg: '63',
+    injured_joints: ['knee_flexion', 'hip_flexion'],
+    injured_side: 'left',
+    rehab_phase: 'sub-acute',
+    diagnosis: 'ACL reconstruction (left)',
+    contraindications: ['Deep squat below 90°', 'Single-leg hop'],
+    restrictions: ['Knee flexion < 90°', 'Pain ≤ 3/10'],
+    doctorName: 'Dr. M. Adler', doctorEmail: 'm.adler@bch.org',
+  });
+  const set = (p) => setD(x => ({ ...x, ...p }));
+  switch (which) {
+    case 'welcome': return <ScreenWelcome onNext={noop} />;
+    case 'demographics': return <ScreenDemographics data={d} set={set} onNext={noop} onBack={noop} />;
+    case 'pt-records': return <ScreenPTRecords data={d} set={set} onNext={noop} onBack={noop} onSkip={noop} />;
+    case 'joints': return <ScreenInjuredJoints data={d} set={set} onNext={noop} onBack={noop} />;
+    case 'side': return <ScreenInjuredSide data={d} set={set} onNext={noop} onBack={noop} />;
+    case 'phase': return <ScreenRehabPhase data={d} set={set} onNext={noop} onBack={noop} />;
+    case 'talk': return <ScreenClinicalTalk data={d} set={set} onNext={noop} onBack={noop} onSkip={noop} />;
+    case 'doctor': return <ScreenDoctor data={d} set={set} onNext={noop} onBack={noop} />;
+    case 'home': return <ScreenHome profile={profile} onStart={noop} onMovements={noop} onDoctor={noop} onReturn={noop} onProfile={noop} />;
+    case 'session': return <ScreenSession onBack={noop} onEnd={noop} />;
+    case 'movements': return <ScreenMovements onBack={noop} />;
+    case 'doctor-review': return <ScreenDoctorReview onBack={noop} />;
+    case 'return': return <ScreenReturn onBack={noop} onDone={noop} profile={profile} />;
+    case 'profile': return <ScreenProfile profile={profile} onBack={noop} onEdit={noop} />;
+    default: return null;
+  }
+}
+
+// "Play" interactive flow — single phone, navigates between screens
+function PlayMode({ tweak }) {
+  const [route, setRoute] = useState(tweak.startScreen || 'home');
+  const profile = SAMPLE_PROFILE;
+  const go = (r) => setRoute(r);
+  const screen = (() => {
+    switch (route) {
+      case 'onboarding': return <OnboardingDemo />;
+      case 'home': return <ScreenHome profile={profile} onStart={() => go('session')} onMovements={() => go('movements')} onDoctor={() => go('doctor-review')} onReturn={() => go('return')} onProfile={() => go('profile')} />;
+      case 'session': return <ScreenSession onBack={() => go('home')} onEnd={() => go('return')} />;
+      case 'movements': return <ScreenMovements onBack={() => go('home')} />;
+      case 'doctor-review': return <ScreenDoctorReview onBack={() => go('home')} />;
+      case 'return': return <ScreenReturn onBack={() => go('home')} onDone={() => go('home')} profile={profile} />;
+      case 'profile': return <ScreenProfile profile={profile} onBack={() => go('home')} onEdit={() => go('onboarding')} />;
+      default: return null;
+    }
+  })();
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', minHeight: '100vh', paddingTop: 28 }}>
+      <IOSDevice width={390} height={780}>{screen}</IOSDevice>
+    </div>
+  );
+}
+
+function App() {
+  const [tweak, setTweak] = useTweaks(/*EDITMODE-BEGIN*/{
+    "mode": "showcase",
+    "startScreen": "onboarding",
+    "showOnboarding": true,
+    "showMain": true,
+    "paperTone": "warm"
+  }/*EDITMODE-END*/);
+
+  // adjust paper tone
+  useEffect(() => {
+    const root = document.documentElement;
+    if (tweak.paperTone === 'cool') {
+      root.style.setProperty('--paper', '#ecedea');
+      root.style.setProperty('--paper-2', '#dfe1de');
+    } else if (tweak.paperTone === 'warm') {
+      root.style.setProperty('--paper', '#f3ecdb');
+      root.style.setProperty('--paper-2', '#ede4cf');
+    } else {
+      root.style.setProperty('--paper', '#fafaf6');
+      root.style.setProperty('--paper-2', '#f0efe9');
+    }
+  }, [tweak.paperTone]);
+
+  if (tweak.mode === 'play') {
+    return (
+      <div className="play-mode">
+        <PlayMode tweak={tweak} />
+        <Tweaks tweak={tweak} setTweak={setTweak} />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="stage-title">
+        <h1>Sentinel</h1>
+        <p>hand-drawn rehab — full flow</p>
+      </div>
+
+      {tweak.showOnboarding && <>
+        <div className="row-label">— onboarding —</div>
+        <div className="stage">
+          {[
+            ['Welcome', 'welcome', '01 Welcome'],
+            ['About you', 'demographics', '02 Demographics'],
+            ['PT records', 'pt-records', '03 PT records'],
+            ['Where it hurts', 'joints', '04 Injured joints'],
+            ['Which side', 'side', '05 Injured side'],
+            ['Rehab phase', 'phase', '06 Rehab phase'],
+            ['Talk about it', 'talk', '07 Clinical talk'],
+            ['Clinician', 'doctor', '08 Doctor link'],
+          ].map(([label, which, sl]) => (
+            <Frame key={which} label={label} screenLabel={sl}>
+              <StaticScreen which={which} />
+            </Frame>
+          ))}
+        </div>
+      </>}
+
+      {tweak.showMain && <>
+        <div className="row-label">— main app —</div>
+        <div className="stage">
+          {[
+            ['Home', 'home', '10 Home'],
+            ['Live session', 'session', '11 Session'],
+            ['Movements', 'movements', '12 Movements'],
+            ['Reviewed by doctor', 'doctor-review', '13 Doctor review'],
+            ['Return after session', 'return', '14 Return'],
+            ['Profile', 'profile', '15 Profile'],
+          ].map(([label, which, sl]) => (
+            <Frame key={which} label={label} screenLabel={sl}>
+              <StaticScreen which={which} />
+            </Frame>
+          ))}
+        </div>
+      </>}
+
+      <Tweaks tweak={tweak} setTweak={setTweak} />
+    </div>
+  );
+}
+
+function Tweaks({ tweak, setTweak }) {
+  return (
+    <TweaksPanel title="Tweaks">
+      <TweakSection title="View">
+        <TweakRadio label="Mode" value={tweak.mode} onChange={v => setTweak('mode', v)}
+          options={[{value:'showcase', label:'All screens'}, {value:'play', label:'Interactive'}]} />
+      </TweakSection>
+      {tweak.mode === 'play' && (
+        <TweakSection title="Start at">
+          <TweakSelect label="Screen" value={tweak.startScreen} onChange={v => setTweak('startScreen', v)}
+            options={[
+              {value:'home', label:'Home'},
+              {value:'onboarding', label:'Onboarding (full flow)'},
+              {value:'session', label:'Live session'},
+              {value:'movements', label:'Movements library'},
+              {value:'doctor-review', label:'Reviewed by doctor'},
+              {value:'return', label:'Return after session'},
+              {value:'profile', label:'Profile'},
+            ]} />
+        </TweakSection>
+      )}
+      {tweak.mode === 'showcase' && (
+        <TweakSection title="Sections">
+          <TweakToggle label="Onboarding" value={tweak.showOnboarding} onChange={v => setTweak('showOnboarding', v)} />
+          <TweakToggle label="Main app" value={tweak.showMain} onChange={v => setTweak('showMain', v)} />
+        </TweakSection>
+      )}
+      <TweakSection title="Aesthetic">
+        <TweakRadio label="Paper tone" value={tweak.paperTone} onChange={v => setTweak('paperTone', v)}
+          options={[{value:'warm',label:'Warm'},{value:'cool',label:'Cool'},{value:'bright',label:'Bright'}]} />
+      </TweakSection>
+    </TweaksPanel>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

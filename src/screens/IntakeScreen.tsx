@@ -76,10 +76,10 @@ function getVoiceModule(): VoiceModule | null {
 }
 
 // The navigation prop gives this screen the ability to switch to another screen.
-// Specifically, after saving the profile we call navigation.replace('Session')
-// which swaps to the Session screen without letting the user go back.
+// Specifically, after saving the profile we call navigation.replace('Home')
+// which swaps to the main home screen without letting the user go back.
 type Props = {
-  navigation: NativeStackNavigationProp<RootStackParamList, 'Intake'>;
+  navigation: NativeStackNavigationProp<RootStackParamList>;
 };
 
 // We only allow three gender options to match the Rivolta 2019 study categories.
@@ -228,6 +228,14 @@ export default function IntakeScreen({ navigation }: Props) {
       weightKg: weightNum,
       bmi: Math.round(bmi * 10) / 10, // round to 1 decimal place, e.g. 26.4
       demographicRiskScore,
+      injured_joints: [],
+      injured_side: 'unknown',
+      rehab_phase: 'unknown',
+      diagnosis: '',
+      contraindications: [],
+      restrictions: [],
+      ptRecords: [],
+      ptRecordsNote: '',
     };
 
     // Save to the phone's local storage. This persists across app restarts.
@@ -240,9 +248,9 @@ export default function IntakeScreen({ navigation }: Props) {
     }
     await saveStoredProfile(profile);
 
-    // Navigate to Session. `replace` removes the Intake screen from the stack
+    // Navigate to Home. `replace` removes the Intake screen from the stack
     // so the back button doesn't bring the user back to the form.
-    navigation.replace('Main');
+    navigation.replace('Home');
   };
 
   const ensureMicPermission = async (): Promise<boolean> => {

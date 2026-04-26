@@ -26,16 +26,13 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, Platform, Alert, ScrollView,
+  SafeAreaView, Platform, Alert,
 } from 'react-native';
 import WebView, { WebViewMessageEvent } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
-import { CompositeNavigationProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
-import { MainTabParamList } from '../navigation/MainTabs';
 import { SessionMode, PoseFrame, UserProfile, RiskScores } from '../types';
 import { PoseDetectors } from '../engine/detectors';
 import { aggregateScores } from '../engine/scoreAggregator';
@@ -60,11 +57,12 @@ import {
 } from '../engine/exercise/exporter';
 import { buildLandmarkCsv } from '../engine/csvLogger';
 import { BACKEND_URL, LOCAL_EXPORTS_URL } from '../constants';
-import ScoreDashboard from '../components/ScoreDashboard';
 import { POSE_HTML } from '../engine/poseHtml';
 import { loadStoredProfile, saveStoredProfile } from '../engine/profileStorage';
 import { upsertPatientProfile } from '../engine/backendClient';
 import { loadPatientInfo, PatientInfo } from '../engine/patientInfo';
+import { SketchBox } from '../sentinel/primitives';
+import { COLORS, FONTS } from '../sentinel/theme';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS + TYPES
@@ -73,10 +71,7 @@ const EXERCISE_DURATION_SEC = 30;
 
 type SessionState = 'idle' | 'awaiting' | 'recording' | 'analyzing' | 'done';
 
-type NavProp = CompositeNavigationProp<
-  BottomTabNavigationProp<MainTabParamList, 'Live'>,
-  NativeStackNavigationProp<RootStackParamList>
->;
+type NavProp = NativeStackNavigationProp<RootStackParamList>;
 
 const DEFAULT_SCORES: RiskScores = {
   balanceStability: 50,
@@ -363,7 +358,7 @@ export default function SessionScreen() {
     }
 
     setSessionState('done');
-    navigation.navigate('Results');
+    navigation.replace('Return');
   }, [navigation, patient]);
 
   const stopSessionEarly = useCallback(() => {
@@ -380,17 +375,12 @@ export default function SessionScreen() {
   }, [finishCurrentExercise, finalizeSession]);
 
   // ── Reset profile ─────────────────────────────────────────────────────────
-  const handleReset = () => {
-    Alert.alert('Reset profile?', 'Returns you to the intake form.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Reset', style: 'destructive',
-        onPress: async () => {
-          await AsyncStorage.removeItem('sentinel_profile');
-          navigation.navigate('Intake');
-        },
-      },
-    ]);
+  const handleHeaderBack = () => {
+    if (sessionState === 'recording' || sessionState === 'analyzing') {
+      stopSessionEarly();
+      return;
+    }
+    navigation.goBack();
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -398,6 +388,7 @@ export default function SessionScreen() {
   // ─────────────────────────────────────────────────────────────────────────
 
   const liveMode: SessionMode = currentExercise ? modeForExercise(currentExercise) : 'standing';
+  const currentExerciseLabel = currentExercise ? EXERCISE_LABELS[currentExercise] : 'Session';
 
   return (
     <View style={styles.root}>
@@ -416,38 +407,83 @@ export default function SessionScreen() {
         />
       )}
 
+      <View pointerEvents="none" style={styles.cameraTint} />
+
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
-        <ScrollView
-          style={styles.overlayScroll}
-          contentContainerStyle={styles.overlayScrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={styles.topBar}>
-            <Text style={styles.title}>SENTINEL</Text>
-            <StatusPill ready={initialized} />
-            <TouchableOpacity style={styles.resetBtn} onPress={handleReset}>
-              <Text style={styles.resetBtnText}>Reset</Text>
-            </TouchableOpacity>
-          </View>
+        <View style={styles.topBar}>
+          <TouchableOpacity style={styles.topButton} onPress={handleHeaderBack}>
+            <Text style={styles.topButtonText}>{'<'}</Text>
+          </TouchableOpacity>
+          <Text style={styles.sessionTitle}>Session</Text>
+          <StatusPill
+            initialized={initialized}
+            sessionState={sessionState}
+            timeLeft={timeLeft}
+          />
+        </View>
 
-          <View style={{ flex: 1 }} pointerEvents="none" />
+        <View style={styles.exercisePillWrap}>
+          <SketchBox
+            seed={41}
+            style={styles.exercisePill}
+            fill="rgba(28,38,50,0.45)"
+            stroke="rgba(243,236,219,0.28)"
+            strokeWidth={1.4}
+          >
+            <Text style={styles.exercisePillText}>
+              {currentExerciseLabel}
+              {patient
+                ? ` - ${Math.min(
+                    exerciseIdx + (sessionState === 'idle' ? 0 : 1),
+                    patient.curr_program.length,
+                  )} / ${patient.curr_program.length}`
+                : ''}
+            </Text>
+          </SketchBox>
+        </View>
 
-          <View pointerEvents="auto">
-            <ScoreDashboard scores={scores} mode={liveMode} initialized={initialized} />
-            <SessionControls
-              state={sessionState}
-              patient={patient}
-              currentExercise={currentExercise}
-              exerciseIdx={exerciseIdx}
-              timeLeft={timeLeft}
-              onStartSession={startSession}
-              onStartExercise={startCurrentExercise}
-              onStop={stopSessionEarly}
-              onStartAnotherSession={startSession}
-            />
+        <View style={styles.bottomStack} pointerEvents="box-none">
+          <LiveScoresCard scores={scores} initialized={initialized} />
+          <SessionControls
+            state={sessionState}
+            patient={patient}
+            currentExercise={currentExercise}
+            exerciseIdx={exerciseIdx}
+            timeLeft={timeLeft}
+            onStartSession={startSession}
+            onStartExercise={startCurrentExercise}
+            onFinishExercise={finishCurrentExercise}
+            onEndSession={stopSessionEarly}
+            onStartAnotherSession={startSession}
+            onGoHome={() => navigation.navigate('Home')}
+          />
+          <View style={styles.modeRow}>
+            {[
+              { id: 'standing', label: 'Standing', sub: 'Balance' },
+              { id: 'transition', label: 'Sit -> Stand', sub: 'Transition' },
+              { id: 'walking', label: 'Walking', sub: 'Gait' },
+            ].map(mode => {
+              const active = liveMode === mode.id;
+              return (
+                <View key={mode.id} style={styles.modeCard}>
+                  <View
+                    style={[
+                      styles.modePill,
+                      active ? styles.modePillActive : styles.modePillInactive,
+                    ]}
+                  >
+                    <Text style={[styles.modeLabel, active && styles.modeLabelActive]}>
+                      {mode.label}
+                    </Text>
+                    <Text style={[styles.modeSub, active && styles.modeSubActive]}>
+                      {mode.sub}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
           </View>
-        </ScrollView>
+        </View>
       </SafeAreaView>
     </View>
   );
@@ -458,166 +494,510 @@ export default function SessionScreen() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function SessionControls({
-  state, patient, currentExercise, exerciseIdx, timeLeft,
-  onStartSession, onStartExercise, onStop, onStartAnotherSession,
+  state,
+  patient,
+  currentExercise,
+  exerciseIdx,
+  timeLeft,
+  onStartSession,
+  onStartExercise,
+  onFinishExercise,
+  onEndSession,
+  onStartAnotherSession,
+  onGoHome,
 }: {
-  state:           SessionState;
-  patient:         PatientInfo | null;
+  state: SessionState;
+  patient: PatientInfo | null;
   currentExercise: ExerciseType | null;
-  exerciseIdx:     number;
-  timeLeft:        number;
-  onStartSession:  () => void;
+  exerciseIdx: number;
+  timeLeft: number;
+  onStartSession: () => void;
   onStartExercise: () => void;
-  onStop:          () => void;
+  onFinishExercise: () => void;
+  onEndSession: () => void;
   onStartAnotherSession: () => void;
+  onGoHome: () => void;
 }) {
+  const total = patient?.curr_program.length ?? 0;
+  const currentPosition =
+    total > 0
+      ? Math.min(exerciseIdx + (state === 'idle' ? 0 : 1), total)
+      : 0;
+
   if (state === 'analyzing') {
     return (
-      <View style={styles.controlBar}>
-        <Text style={styles.analyzingText}>Analyzing session…</Text>
-      </View>
+      <SketchBox
+        seed={201}
+        style={styles.controlBox}
+        fill="rgba(243,236,219,0.92)"
+        stroke="rgba(243,236,219,0.92)"
+      >
+        <Text style={styles.controlTitle}>Analyzing session</Text>
+        <Text style={styles.controlHint}>
+          Uploading your exercises and preparing the doctor review.
+        </Text>
+      </SketchBox>
     );
   }
 
   if (state === 'done') {
     return (
-      <View style={styles.promptBar}>
-        <Text style={styles.promptTitle}>Session complete</Text>
-        <Text style={styles.subtle}>
-          One full session includes 2 squats, 2 step-downs, and walking.
+      <SketchBox
+        seed={202}
+        style={styles.controlBox}
+        fill="rgba(243,236,219,0.92)"
+        stroke="rgba(243,236,219,0.92)"
+      >
+        <Text style={styles.controlTitle}>Session complete</Text>
+        <Text style={styles.controlHint}>
+          Your notes and recordings are ready to review.
         </Text>
-        <TouchableOpacity style={styles.startBtn} onPress={onStartAnotherSession}>
-          <Text style={styles.startBtnText}>⬤  Start Another Session</Text>
-        </TouchableOpacity>
-      </View>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={styles.primaryButton} onPress={onStartAnotherSession}>
+            <Text style={styles.primaryButtonText}>Start another</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.secondaryButton} onPress={onGoHome}>
+            <Text style={styles.secondaryButtonText}>Home</Text>
+          </TouchableOpacity>
+        </View>
+      </SketchBox>
     );
   }
 
-  if (state === 'recording' && currentExercise) {
+  if (state === 'recording' && currentExercise && patient) {
     return (
-      <View style={styles.controlBar}>
-        <View style={styles.countdownBadge}>
-          <Text style={styles.countdownText}>{timeLeft}s</Text>
+      <SketchBox
+        seed={203}
+        style={styles.controlBox}
+        fill="rgba(243,236,219,0.92)"
+        stroke="rgba(243,236,219,0.92)"
+      >
+        <Text style={styles.controlTitle}>Recording now</Text>
+        <Text style={styles.controlHint}>
+          {EXERCISE_LABELS[currentExercise]} • {currentPosition}/{total}
+        </Text>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[styles.primaryButton, styles.primaryButtonDanger]}
+            onPress={onFinishExercise}
+          >
+            <Text style={styles.primaryButtonText}>Stop • {timeLeft}s left</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.secondaryButton} onPress={onEndSession}>
+            <Text style={styles.secondaryButtonText}>End</Text>
+          </TouchableOpacity>
         </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.recordingLabel}>Recording: {EXERCISE_LABELS[currentExercise]}</Text>
-          {patient && (
-            <Text style={styles.subtle}>
-              {exerciseIdx + 1} of {patient.curr_program.length}
-            </Text>
-          )}
-        </View>
-        <TouchableOpacity style={styles.stopBtn} onPress={onStop}>
-          <Text style={styles.stopBtnText}>■ Stop</Text>
-        </TouchableOpacity>
-      </View>
+      </SketchBox>
     );
   }
 
   if (state === 'awaiting' && currentExercise && patient) {
     return (
-      <View style={styles.promptBar}>
-        <Text style={styles.subtle}>
-          Next ({exerciseIdx + 1}/{patient.curr_program.length})
+      <SketchBox
+        seed={204}
+        style={styles.controlBox}
+        fill="rgba(243,236,219,0.92)"
+        stroke="rgba(243,236,219,0.92)"
+      >
+        <Text style={styles.controlTitle}>Next move</Text>
+        <Text style={styles.controlHint}>
+          {EXERCISE_LABELS[currentExercise]} • {currentPosition}/{total} • 30s capture
         </Text>
-        <Text style={styles.promptTitle}>{EXERCISE_LABELS[currentExercise]}</Text>
-        <Text style={styles.subtle}>Get into position. 30s recording.</Text>
-        <TouchableOpacity style={styles.startBtn} onPress={onStartExercise}>
-          <Text style={styles.startBtnText}>⬤  Start</Text>
-        </TouchableOpacity>
-      </View>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={styles.primaryButton} onPress={onStartExercise}>
+            <Text style={styles.primaryButtonText}>Record 30s</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.secondaryButton} onPress={onEndSession}>
+            <Text style={styles.secondaryButtonText}>End</Text>
+          </TouchableOpacity>
+        </View>
+      </SketchBox>
     );
   }
 
-  // idle
   if (!patient) {
     return (
-      <View style={styles.controlBar}>
-        <Text style={styles.subtle}>Loading patient info…</Text>
-      </View>
+      <SketchBox
+        seed={205}
+        style={styles.controlBox}
+        fill="rgba(243,236,219,0.92)"
+        stroke="rgba(243,236,219,0.92)"
+      >
+        <Text style={styles.controlTitle}>Loading session</Text>
+        <Text style={styles.controlHint}>Pulling your prescribed exercises now.</Text>
+      </SketchBox>
     );
   }
+
   return (
-    <View style={styles.promptBar}>
-      <Text style={styles.subtle}>Patient {patient.patientId} — {patient.curr_program.length} exercises</Text>
-      <TouchableOpacity style={styles.startBtn} onPress={onStartSession}>
-        <Text style={styles.startBtnText}>⬤  Start Session</Text>
-      </TouchableOpacity>
+    <SketchBox
+      seed={206}
+      style={styles.controlBox}
+      fill="rgba(243,236,219,0.92)"
+      stroke="rgba(243,236,219,0.92)"
+    >
+      <Text style={styles.controlTitle}>Ready to start</Text>
+      <Text style={styles.controlHint}>
+        {patient.patientId} • {patient.curr_program.length} prescribed moves
+      </Text>
+      <View style={styles.buttonRow}>
+        <TouchableOpacity style={styles.primaryButton} onPress={onStartSession}>
+          <Text style={styles.primaryButtonText}>Start session</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.secondaryButton} onPress={onGoHome}>
+          <Text style={styles.secondaryButtonText}>Home</Text>
+        </TouchableOpacity>
+      </View>
+    </SketchBox>
+  );
+}
+
+function LiveScoresCard({
+  scores,
+  initialized,
+}: {
+  scores: RiskScores;
+  initialized: boolean;
+}) {
+  const items = [
+    { label: 'Balance', value: Math.round(scores.balanceStability) },
+    { label: 'Gait', value: Math.round(scores.gaitRegularity) },
+    { label: 'Sway', value: Math.round(scores.lateralSway) },
+    { label: 'Fall risk', value: Math.round(100 - scores.overallFallRisk), inverse: true },
+  ];
+
+  return (
+    <SketchBox
+      seed={111}
+      style={styles.scoreCard}
+      fill="rgba(243,236,219,0.92)"
+      stroke="rgba(243,236,219,0.92)"
+    >
+      <View style={styles.scoreCardHeader}>
+        <Text style={styles.scoreCardTitle}>Live scores</Text>
+        <Text style={styles.scoreCardHint}>
+          {initialized ? 'updates 30x/sec' : 'warming up camera'}
+        </Text>
+      </View>
+      <View style={styles.scoreGrid}>
+        {items.map(item => (
+          <LiveScoreRow
+            key={item.label}
+            label={item.label}
+            value={item.value}
+            inverse={item.inverse}
+          />
+        ))}
+      </View>
+    </SketchBox>
+  );
+}
+
+function LiveScoreRow({
+  label,
+  value,
+  inverse,
+}: {
+  label: string;
+  value: number;
+  inverse?: boolean;
+}) {
+  const good = inverse ? value < 30 : value >= 70;
+  const warn = inverse ? value < 50 : value >= 50;
+  const color = good ? COLORS.greenDeep : warn ? COLORS.warmDeep : COLORS.bad;
+  const clampedValue = Math.max(0, Math.min(100, value));
+
+  return (
+    <View style={styles.scoreRow}>
+      <View style={styles.scoreTopLine}>
+        <Text style={styles.scoreLabel}>{label}</Text>
+        <Text style={[styles.scoreValue, { color }]}>{clampedValue}</Text>
+      </View>
+      <View style={styles.scoreTrack}>
+        <View
+          style={[
+            styles.scoreFill,
+            { backgroundColor: color, width: `${Math.max(6, clampedValue)}%` },
+          ]}
+        />
+      </View>
     </View>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STATUS PILL
-// ─────────────────────────────────────────────────────────────────────────────
+function StatusPill({
+  initialized,
+  sessionState,
+  timeLeft,
+}: {
+  initialized: boolean;
+  sessionState: SessionState;
+  timeLeft: number;
+}) {
+  let color = COLORS.green;
+  let border = COLORS.greenDeep;
+  let label = 'LIVE';
 
-function StatusPill({ ready }: { ready: boolean }) {
-  const color = ready ? '#00c853' : '#f0a500';
-  const label = ready ? 'LIVE' : 'LOADING';
+  if (!initialized) {
+    color = COLORS.warm;
+    border = COLORS.warmDeep;
+    label = 'LOADING';
+  }
+
+  if (sessionState === 'recording') {
+    color = COLORS.bad;
+    border = COLORS.bad;
+    label = `REC ${Math.max(0, EXERCISE_DURATION_SEC - timeLeft)}s`;
+  } else if (sessionState === 'analyzing') {
+    color = COLORS.warm;
+    border = COLORS.warmDeep;
+    label = 'SYNCING';
+  } else if (sessionState === 'done') {
+    color = COLORS.accent;
+    border = COLORS.accentDeep;
+    label = 'DONE';
+  }
+
   return (
-    <View style={[styles.pill, { backgroundColor: color + '33' }]}>
-      <View style={[styles.dot, { backgroundColor: color }]} />
-      <Text style={[styles.pillText, { color }]}>{label}</Text>
+    <View style={[styles.statusPill, { borderColor: border, backgroundColor: `${color}33` }]}>
+      <View style={[styles.statusDot, { backgroundColor: color }]} />
+      <Text style={[styles.statusText, { color }]}>{label}</Text>
     </View>
   );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// STYLES
-// ─────────────────────────────────────────────────────────────────────────────
-
-const C = {
-  bg:     '#0d1b2a',
-  border: '#1e3a50',
-  accent: '#00d4ff',
-  muted:  '#4a7090',
-};
 
 const styles = StyleSheet.create({
-  root:    { flex: 1, backgroundColor: '#000' },
-  overlay: { flex: 1 },
-  overlayScroll: { flex: 1 },
-  overlayScrollContent: { flexGrow: 1 },
-
+  root: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  overlay: {
+    flex: 1,
+  },
+  cameraTint: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(26,31,37,0.16)',
+  },
   topBar: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 10,
-    backgroundColor: 'rgba(13,27,42,0.80)', gap: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 8,
   },
-  title:        { flex: 1, fontSize: 18, fontWeight: '800', color: C.accent, letterSpacing: 4 },
-  pill:         { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, gap: 5 },
-  dot:          { width: 6, height: 6, borderRadius: 3 },
-  pillText:     { fontSize: 11, fontWeight: '700', letterSpacing: 1 },
-  resetBtn:     { paddingHorizontal: 10, paddingVertical: 4 },
-  resetBtnText: { fontSize: 12, color: C.muted, fontWeight: '500' },
-
-  controlBar: {
-    backgroundColor: 'rgba(13,27,42,0.92)',
-    paddingHorizontal: 12, paddingVertical: 14,
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    borderTopWidth: 1, borderTopColor: C.border,
-    paddingBottom: Platform.OS === 'ios' ? 18 : 14,
+  topButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(243,236,219,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(243,236,219,0.12)',
   },
-  promptBar: {
-    backgroundColor: 'rgba(13,27,42,0.94)',
-    paddingHorizontal: 16, paddingVertical: 14,
-    borderTopWidth: 1, borderTopColor: C.border,
-    paddingBottom: Platform.OS === 'ios' ? 18 : 14,
+  topButtonText: {
+    fontFamily: FONTS.handBold,
+    fontSize: 18,
+    color: COLORS.paper,
+  },
+  sessionTitle: {
+    flex: 1,
+    fontFamily: FONTS.display,
+    fontSize: 24,
+    color: COLORS.paper,
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+    borderRadius: 20,
+    borderWidth: 1.5,
   },
-  promptTitle:    { color: '#fff', fontSize: 18, fontWeight: '700' },
-  subtle:         { color: C.muted, fontSize: 12 },
-  startBtn: {
-    marginTop: 6, backgroundColor: 'rgba(0,212,255,0.10)',
-    borderWidth: 1, borderColor: C.accent,
-    borderRadius: 10, paddingVertical: 12, alignItems: 'center',
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
   },
-  startBtnText:   { color: C.accent, fontSize: 14, fontWeight: '700' },
-
-  countdownBadge: { backgroundColor: '#f44336', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, minWidth: 48, alignItems: 'center' },
-  countdownText:  { color: '#fff', fontSize: 16, fontWeight: '800' },
-  recordingLabel: { color: '#f44336', fontSize: 13, fontWeight: '700' },
-  stopBtn:        { backgroundColor: 'rgba(244,67,54,0.15)', borderWidth: 1, borderColor: '#f44336', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
-  stopBtnText:    { color: '#f44336', fontSize: 13, fontWeight: '700' },
-  analyzingText:  { flex: 1, color: C.accent, fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  statusText: {
+    fontFamily: FONTS.hand,
+    fontSize: 12,
+  },
+  exercisePillWrap: {
+    alignItems: 'center',
+    marginTop: 12,
+    paddingHorizontal: 16,
+  },
+  exercisePill: {
+    minWidth: 180,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  exercisePillText: {
+    textAlign: 'center',
+    fontFamily: FONTS.handBold,
+    fontSize: 14,
+    color: COLORS.paper,
+  },
+  bottomStack: {
+    marginTop: 'auto',
+    paddingHorizontal: 14,
+    paddingBottom: Platform.OS === 'ios' ? 18 : 16,
+    gap: 12,
+  },
+  scoreCard: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  scoreCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  scoreCardTitle: {
+    fontFamily: FONTS.display,
+    fontSize: 22,
+    color: COLORS.ink,
+  },
+  scoreCardHint: {
+    fontFamily: FONTS.hand,
+    fontSize: 12,
+    color: COLORS.ink3,
+  },
+  scoreGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 12,
+  },
+  scoreRow: {
+    width: '48%',
+  },
+  scoreTopLine: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: 4,
+  },
+  scoreLabel: {
+    fontFamily: FONTS.hand,
+    fontSize: 13,
+    color: COLORS.ink3,
+  },
+  scoreValue: {
+    fontFamily: FONTS.display,
+    fontSize: 20,
+    color: COLORS.ink,
+  },
+  scoreTrack: {
+    height: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(28,38,50,0.16)',
+    overflow: 'hidden',
+  },
+  scoreFill: {
+    height: '100%',
+    borderRadius: 8,
+  },
+  controlBox: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  controlTitle: {
+    fontFamily: FONTS.display,
+    fontSize: 22,
+    color: COLORS.ink,
+  },
+  controlHint: {
+    marginTop: 4,
+    fontFamily: FONTS.hand,
+    fontSize: 13,
+    color: COLORS.ink3,
+    lineHeight: 18,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  primaryButton: {
+    flex: 1,
+    minHeight: 50,
+    borderRadius: 14,
+    backgroundColor: COLORS.ink,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  primaryButtonDanger: {
+    backgroundColor: COLORS.bad,
+  },
+  primaryButtonText: {
+    fontFamily: FONTS.handBold,
+    fontSize: 16,
+    color: COLORS.paper,
+  },
+  secondaryButton: {
+    minHeight: 50,
+    minWidth: 78,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(243,236,219,0.92)',
+    borderWidth: 1.5,
+    borderColor: COLORS.ink,
+  },
+  secondaryButtonText: {
+    fontFamily: FONTS.handBold,
+    fontSize: 16,
+    color: COLORS.ink,
+  },
+  modeRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  modeCard: {
+    flex: 1,
+  },
+  modePill: {
+    borderRadius: 12,
+    borderWidth: 1.5,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+  },
+  modePillActive: {
+    backgroundColor: 'rgba(243,236,219,0.92)',
+    borderColor: 'rgba(243,236,219,0.92)',
+  },
+  modePillInactive: {
+    backgroundColor: 'rgba(243,236,219,0.12)',
+    borderColor: 'rgba(243,236,219,0.35)',
+  },
+  modeLabel: {
+    fontFamily: FONTS.display,
+    fontSize: 16,
+    color: COLORS.paper,
+  },
+  modeLabelActive: {
+    color: COLORS.ink,
+  },
+  modeSub: {
+    marginTop: 1,
+    fontFamily: FONTS.hand,
+    fontSize: 10,
+    color: 'rgba(243,236,219,0.55)',
+    letterSpacing: 1,
+  },
+  modeSubActive: {
+    color: COLORS.ink3,
+  },
 });
