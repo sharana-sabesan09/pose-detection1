@@ -92,7 +92,12 @@ async def run_patient_advisor(
     ]
 
     rag_query = f"physical therapy patient advice {question}"
-    clinical_context = await retrieve_clinical_context(rag_query)
+    rag_result = await retrieve_clinical_context(rag_query)
+    clinical_block = (
+        f"Clinical guidance context:\n{rag_result.context}"
+        if rag_result.hit_count > 0
+        else "No clinical guidelines available for this question."
+    )
 
     prompt = f"""You are a cautious physical therapy support agent.
 
@@ -111,8 +116,7 @@ Recent session context:
 Patient question:
 {question}
 
-Clinical guidance context:
-{clinical_context}
+{clinical_block}
 
 Write supportive patient guidance grounded in the data above.
 Do not diagnose.

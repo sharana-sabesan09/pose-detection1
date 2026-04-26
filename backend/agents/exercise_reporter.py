@@ -192,7 +192,12 @@ async def run_exercise_reporter(
     # RAG query keyed on dominant errors so guidelines are exercise-specific
     error_terms = " ".join(e["error"] for e in stats["top_errors"]) or "squat biomechanics"
     rag_query = f"{result.exercise} exercise rehabilitation {error_terms}"
-    clinical_context = await retrieve_clinical_context(rag_query)
+    rag_result = await retrieve_clinical_context(rag_query)
+    clinical_context = (
+        f"Clinical guidelines:\n{rag_result.context}"
+        if rag_result.hit_count > 0
+        else "No clinical guidelines available for this exercise."
+    )
 
     # Past reporter summaries for longitudinal context
     past_text = "No previous summaries."
