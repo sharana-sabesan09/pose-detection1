@@ -44,8 +44,11 @@ import {
 import { ExercisePipeline } from '../engine/exercise/pipeline';
 import {
   ExerciseType,
+  RepErrors,
   SessionExerciseEntry,
 } from '../engine/exercise/types';
+import { computeLiveErrors, fetchTTSAudio } from '../engine/exercise/liveFeedback';
+import { getSummaryMessage } from '../engine/exercise/feedback';
 import {
   buildExportPayload,
   buildSessionExerciseEntry,
@@ -129,12 +132,14 @@ export default function SessionScreen() {
   const completedEntriesRef  = useRef<SessionExerciseEntry[]>([]);
   const framesByExerciseRef  = useRef<{ exercise: string; frames: ReturnType<ExercisePipeline['getFrameBuffer']> }[]>([]);
   const walkingRecordedFramesRef = useRef<RecordedFrame[]>([]);  // for analyzeRecording dashboard data
+  const calibrationBatchIdRef = useRef<string | null>(null);
 
   const pipelineRef     = useRef<ExercisePipeline | null>(null);
   const profileRef      = useRef<UserProfile | null>(null);
   const detectorsRef    = useRef(new PoseDetectors());
   const sessionStateRef = useRef(sessionState);
   const webViewRef      = useRef<WebView>(null);
+  const ttsRecordingEpochRef = useRef(0);
 
   useEffect(() => { sessionStateRef.current = sessionState; }, [sessionState]);
 
@@ -193,6 +198,44 @@ export default function SessionScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionState, exerciseIdx]);
 
+  // ── Live coaching TTS: every 10s while recording (SLS / LSDT only) ─────────
+  useEffect(() => {
+    if (sessionState !== 'recording') return;
+    if (!currentExercise || currentExercise === 'walking') return;
+
+    ttsRecordingEpochRef.current += 1;
+    const epoch = ttsRecordingEpochRef.current;
+    const exType = feedbackExerciseType(currentExercise);
+
+    const runTick = async () => {
+      if (sessionStateRef.current !== 'recording') return;
+      if (ttsRecordingEpochRef.current !== epoch) return;
+      const pipe = pipelineRef.current;
+      if (!pipe) return;
+      const buf = pipe.getFrameBuffer();
+      if (buf.length === 0) return;
+
+      const errors = computeLiveErrors(buf);
+      const classification = liveErrorsToClassification(errors);
+      const text = getSummaryMessage(errors, classification, exType);
+      const b64 = await fetchTTSAudio(text);
+      if (sessionStateRef.current !== 'recording') return;
+      if (ttsRecordingEpochRef.current !== epoch) return;
+      if (!b64) return;
+      const wv = webViewRef.current;
+      if (!wv) return;
+      wv.injectJavaScript(
+        `(function(){try{if(typeof window.playAudio==='function')window.playAudio(${JSON.stringify(b64)});}catch(e){}})();true;`,
+      );
+    };
+
+    const id = setInterval(runTick, 10000);
+    return () => {
+      clearInterval(id);
+      ttsRecordingEpochRef.current += 1;
+    };
+  }, [sessionState, currentExercise]);
+
   // ── Receive landmarks from MediaPipe WebView ──────────────────────────────
   const onMessage = useCallback((event: WebViewMessageEvent) => {
     try {
@@ -223,6 +266,9 @@ export default function SessionScreen() {
       Alert.alert('No exercises prescribed', 'This patient has no curr_program entries.');
       return;
     }
+    calibrationBatchIdRef.current = programStartsWithCalibration(patient.curr_program)
+      ? newCalibrationBatchId()
+      : null;
     sessionIdRef.current = new Date().toISOString();
     sessionStartedAtRef.current = Date.now();
     completedEntriesRef.current = [];
@@ -319,6 +365,20 @@ export default function SessionScreen() {
       let uploadedCount = 0;
       const backendErrors: string[] = [];
       for (const [i, entry] of entries.entries()) {
+        const frames = framesByExerciseRef.current[i]?.frames ?? [];
+        const mode = modeForExercise(entry.exercise as ExerciseType);
+        const recorded: RecordedFrame[] = frames.map(f => ({
+          t: f.timestamp,
+          pose: f.landmarks as unknown as PoseFrame,
+        }));
+        const perExerciseFramesCsv = buildLandmarkCsv(recorded, mode);
+
+        const step = calibrationStepForExercise(entry.exercise);
+        const calibration =
+          calibrationBatchIdRef.current && step
+            ? { batchId: calibrationBatchIdRef.current, step }
+            : undefined;
+
         const exercisePayload = buildExportPayload(
           `${sessionId}-${entry.exercise}-${i + 1}`,
           sessionId,
@@ -326,8 +386,9 @@ export default function SessionScreen() {
           entry.startedAtMs,
           entry.endedAtMs,
           entry.summary,
-          framesByExerciseRef.current[i]?.frames ?? [],
+          frames,
           patientId,
+          calibration,
         );
         const backendRes = await postExerciseToBackend(BACKEND_URL, exercisePayload);
         if (backendRes.ok) uploadedCount += 1;

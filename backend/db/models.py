@@ -1,6 +1,18 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Float, Integer, ForeignKey, Text, DateTime, JSON, Boolean, Index
+from sqlalchemy import (
+    Column,
+    String,
+    Float,
+    Integer,
+    ForeignKey,
+    Text,
+    DateTime,
+    JSON,
+    Boolean,
+    Index,
+    LargeBinary,
+)
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 # Use plain String(36) for UUIDs — works on both SQLite and PostgreSQL.
@@ -132,6 +144,12 @@ class Exercise(Base):
     frames_csv = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    # Optional calibration protocol markers (mobile app).
+    # When both are set, `calibration_step` is expected to be 1–4 for the fixed
+    # filming sequence (left SLS, right SLS, left LSD, right LSD).
+    calibration_batch_id = Column(String(64), nullable=True)
+    calibration_step = Column(Integer, nullable=True)
+
     # When set, raw PoseFrame rows are stored against this Session so the
     # pose_analysis_agent can read them through the existing frames pipeline.
     linked_session_id = Column(String(36), ForeignKey("sessions.id"), nullable=True)
@@ -147,7 +165,7 @@ class Exercise(Base):
 
     patient = relationship("Patient", foreign_keys=[patient_id])
     linked_session = relationship("Session", foreign_keys=[linked_session_id])
-    reps = relationship("RepAnalysis", back_populates="exercise", cascade="all, delete-orphan")
+    reps = relationship("RepAnalysis", back_populates="exercise_session", cascade="all, delete-orphan")
 
 
 class RepAnalysis(Base):

@@ -59,6 +59,12 @@ export interface SessionExportPayload {
   frameFeaturesCsv: string;
   /** Optional backend patient linkage. */
   patientId?: string | null;
+  /**
+   * Optional calibration markers for the fixed 4-step filming protocol.
+   * When set, both fields must be present together (backend validates).
+   */
+  calibrationBatchId?: string;
+  calibrationStep?: 1 | 2 | 3 | 4;
 }
 
 /**
@@ -97,6 +103,7 @@ export function buildExportPayload(
   summary: SessionSummary,
   frameFeatures: FrameFeatures[],
   patientId?: string | null,
+  calibration?: { batchId: string; step: 1 | 2 | 3 | 4 },
 ): SessionExportPayload {
   return {
     exerciseId,
@@ -112,6 +119,8 @@ export function buildExportPayload(
     repsCsv:    buildRepsCsv(summary.reps),
     frameFeaturesCsv: buildFrameDebugCsv(frameFeatures),
     patientId: patientId ?? null,
+    calibrationBatchId: calibration?.batchId,
+    calibrationStep: calibration?.step,
   };
 }
 
@@ -371,6 +380,12 @@ export async function postExerciseToBackend(
         repsCsv: payload.repsCsv,
         frameFeaturesCsv: payload.frameFeaturesCsv,
         framesCsv: framesCsv ?? null,
+        ...(payload.calibrationBatchId && payload.calibrationStep
+          ? {
+              calibrationBatchId: payload.calibrationBatchId,
+              calibrationStep: payload.calibrationStep,
+            }
+          : {}),
       }),
       signal: controller.signal,
     });

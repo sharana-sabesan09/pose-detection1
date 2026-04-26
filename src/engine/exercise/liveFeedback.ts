@@ -11,8 +11,7 @@
  */
 
 import { FrameFeatures, ERROR_THRESHOLDS, RepErrors } from './types';
-import { getSummaryMessage }                           from './feedback';
-import { BACKEND_URL }                                 from '../../constants';
+import { fetchTtsSpeak } from '../backendClient';
 
 const WINDOW_FRAMES = 60;  // ~2–6 seconds depending on fps
 
@@ -63,17 +62,5 @@ export function computeLiveErrors(buffer: FrameFeatures[]): RepErrors {
 
 /** Fetch TTS audio from the backend and return base64-encoded MP3. */
 export async function fetchTTSAudio(text: string): Promise<string | null> {
-  if (!BACKEND_URL || !text.trim()) return null;
-  try {
-    const res = await fetch(`${BACKEND_URL}/tts/speak`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ text }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data?.audio_b64 ?? null;
-  } catch {
-    return null;
-  }
+  return fetchTtsSpeak(text);
 }
