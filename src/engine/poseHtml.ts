@@ -102,7 +102,7 @@ export const POSE_HTML = `
     const GHOST_INTRO_FULLSCREEN_MS = 12000;
     /** Panel morphs fullscreen → corner PiP over this duration (ease-in-out). */
     const GHOST_LAYOUT_TRANSITION_MS = 700;
-    const GHOST_PANEL_BG = '#D7B1A5';
+    const GHOST_PANEL_BG = '#C2B280';
     const GHOST_FILL_TRAINER = '#ffffff';
     const GHOST_OUTLINE_TRAINER = '#000000';
     const GHOST_CORNER_MARGIN = 16;
@@ -113,6 +113,20 @@ export const POSE_HTML = `
       [23,25],[25,27],[27,29],[24,26],[26,28],[28,30],
       [11,13],[13,15],[12,14],[14,16],
     ];
+
+    /** Shoulder–hip perimeter; filled first so torso isn’t four overlapping capsules. */
+    const GHOST_TORSO_LOOP = [11, 12, 24, 23];
+
+    function ghostTorsoEdgeExcludedFromCapsules(a, b) {
+      const lo = a < b ? a : b;
+      const hi = a < b ? b : a;
+      return (
+        (lo === 11 && hi === 12) ||
+        (lo === 11 && hi === 23) ||
+        (lo === 12 && hi === 24) ||
+        (lo === 23 && hi === 24)
+      );
+    }
 
     /** Half-width multiplier per bone pair (1 = base); thinner distal limbs, wider torso/hips. */
     function ghostLimbHalfWMult(a, b) {
@@ -191,6 +205,27 @@ export const POSE_HTML = `
         };
       }
       return out;
+    }
+
+    function fillStrokeTorsoQuad(frame, vw, vh, sc, ox, oy, W, H, outlineW) {
+      const pts = [];
+      for (const idx of GHOST_TORSO_LOOP) {
+        const p = ghostPx(frame[idx], vw, vh, sc, ox, oy, W, H);
+        if (p.v < 0.2) return;
+        pts.push(p);
+      }
+      if (pts.length !== 4) return;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.closePath();
+      ctx.fillStyle = GHOST_FILL_TRAINER;
+      ctx.fill();
+      ctx.strokeStyle = GHOST_OUTLINE_TRAINER;
+      ctx.lineWidth = outlineW;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.stroke();
     }
 
     /** Filled limb “tube” + black outline between two screen points. */
@@ -274,7 +309,10 @@ export const POSE_HTML = `
 
     function drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, baseLimbHalf, jointRBase) {
       ctx.globalAlpha = 1;
+      const torsoOw = Math.max(2.4, Math.min(4.2, baseLimbHalf * 0.42));
+      fillStrokeTorsoQuad(frame, vw, vh, sc, ox, oy, W, H, torsoOw);
       for (const [a, b] of GHOST_CONNECTIONS) {
+        if (ghostTorsoEdgeExcludedFromCapsules(a, b)) continue;
         const pa = ghostPx(frame[a], vw, vh, sc, ox, oy, W, H);
         const pb = ghostPx(frame[b], vw, vh, sc, ox, oy, W, H);
         if (pa.v < 0.2 || pb.v < 0.2) continue;
