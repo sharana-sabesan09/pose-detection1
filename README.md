@@ -254,6 +254,56 @@ python tools/extract_reference_from_video.py \
   --mode lateral_step_down_ref
 ```
 
+### 1b) Four-step calibration references (left/right × SLS + step-down)
+
+The mobile “calibration batch” flow compares each captured step to a **side-specific**
+reference cycle. Those references live under:
+
+- `references/calibration/01_left_sls/frames.csv`
+- `references/calibration/02_right_sls/frames.csv`
+- `references/calibration/03_left_lsd/frames.csv`
+- `references/calibration/04_right_lsd/frames.csv`
+
+Re-generate them any time from fresh MP4s:
+
+```bash
+source .venv-render/bin/activate
+
+python tools/extract_reference_from_video.py \
+  --video "/path/to/left_squat.mp4" \
+  --out "references/calibration/01_left_sls/frames.csv" \
+  --mode reference
+
+python tools/extract_reference_from_video.py \
+  --video "/path/to/right_squat.mp4" \
+  --out "references/calibration/02_right_sls/frames.csv" \
+  --mode reference
+
+python tools/extract_reference_from_video.py \
+  --video "/path/to/left_step_down.mp4" \
+  --out "references/calibration/03_left_lsd/frames.csv" \
+  --mode reference
+
+python tools/extract_reference_from_video.py \
+  --video "/path/to/right_step_down.mp4" \
+  --out "references/calibration/04_right_lsd/frames.csv" \
+  --mode reference
+```
+
+After a patient completes a calibration batch in the app (same `calibrationBatchId`
+on steps 1–4), you can render all four overlays in one shot:
+
+```bash
+source .venv-render/bin/activate
+
+python tools/render_calibration_batch.py \
+  --base_url http://127.0.0.1:8000 \
+  --token "$TOKEN" \
+  --patient_id "<patientId>" \
+  --calibration_batch_id "<calibrationBatchId>" \
+  --out_dir exports/calibration_overlays
+```
+
 ### 2) Render overlay locally (CSV → MP4)
 
 ```bash
