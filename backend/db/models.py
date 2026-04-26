@@ -76,6 +76,8 @@ class PoseFrame(Base):
     session_id = Column(String(36), ForeignKey("sessions.id"), nullable=False)
     timestamp = Column(Float, nullable=False)
     angles_json = Column(JSON, nullable=False)
+    # Optional raw MediaPipe landmarks: [{x,y,z,visibility}, ...] × 33
+    landmarks_json = Column(JSON, nullable=True)
 
     session = relationship("Session", back_populates="frames")
 
@@ -109,6 +111,8 @@ class ExerciseSession(Base):
     metadata_json = Column(JSON, nullable=True)
     reps_csv = Column(Text, nullable=True)
     frame_features_csv = Column(Text, nullable=True)
+    # Optional raw landmark CSV (frames.csv) uploaded by the mobile app.
+    frames_csv = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # When set, raw PoseFrame rows are stored against this Session so the

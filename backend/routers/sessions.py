@@ -13,6 +13,8 @@ from schemas.voice import VoiceMetadataExtractRequest, VoiceMetadataExtractRespo
 from agents.orchestrator import run_session_pipeline, run_exercise_pipeline
 from routers.auth import require_jwt
 from utils.frame_csv import parse_frame_features_csv
+from utils.landmarks_csv import parse_landmarks_csv
+from fastapi.responses import PlainTextResponse
 from utils.voice_metadata import build_session_metadata_from_voice
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -145,6 +147,7 @@ async def store_exercise_result(
         metadata_json=body.sessionMetadata.model_dump() if body.sessionMetadata else None,
         reps_csv=body.repsCsv,
         frame_features_csv=body.frameFeaturesCsv,
+        frames_csv=body.framesCsv,
         linked_session_id=linked_session.id,
     )
     db.add(exercise_session)
@@ -194,6 +197,17 @@ async def store_exercise_result(
                 angles_json=fr["angles_json"],
             ))
 
+    # Optional raw landmarks CSV (used for overlay rendering / debugging).
+    if body.framesCsv:
+        for fr in parse_landmarks_csv(body.framesCsv):
+            db.add(PoseFrame(
+                id=str(uuid.uuid4()),
+                session_id=linked_session.id,
+                timestamp=fr["timestamp"],
+                angles_json={},  # allowed to be empty JSON
+                landmarks_json=fr["landmarks_json"],
+            ))
+
     linked_session_id = linked_session.id  # capture before commit expires the ORM object
     await db.commit()
 
@@ -211,3 +225,50 @@ async def store_exercise_result(
         overallRating=body.summary.summary.overallRating,
         linkedSessionId=linked_session_id,
     )
+
+
+def _build_landmarks_csv_from_frames(frames: list[PoseFrame], mode: str) -> str:
+    header = ["t", "mode"]
+    for i in range(33):
+        header += [f"lm{i}_x", f"lm{i}_y", f"lm{i}_z", f"lm{i}_v"]
+    import io
+    import csv as _csv
+    out = io.StringIO()
+    w = _csv.writer(out)
+    w.writerow(header)
+    for f in frames:
+        row = [f.timestamp, mode]
+        lms = f.landmarks_json or []
+        for i in range(33):
+            lm = lms[i] if i < len(lms) and isinstance(lms[i], dict) else {}
+            row += [lm.get("x", ""), lm.get("y", ""), lm.get("z", ""), lm.get("visibility", "")]
+        w.writerow(row)
+    return out.getvalue()
+
+
+@router.get("/latest/frames.csv", response_class=PlainTextResponse)
+async def latest_landmark_frames_csv(
+    exercise: str,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_jwt),
+):
+    result = await db.execute(
+        select(ExerciseSession)
+        .where(ExerciseSession.exercise == exercise)
+        .order_by(ExerciseSession.created_at.desc())
+        .limit(1)
+    )
+    ex = result.scalars().first()
+    if not ex or not ex.linked_session_id:
+        raise HTTPException(status_code=404, detail="no stored session with linked frames")
+
+    frames_result = await db.execute(
+        select(PoseFrame)
+        .where(PoseFrame.session_id == ex.linked_session_id)
+        .where(PoseFrame.landmarks_json.isnot(None))
+        .order_by(PoseFrame.timestamp)
+    )
+    frames = frames_result.scalars().all()
+    if not frames:
+        raise HTTPException(status_code=404, detail="no landmark frames stored for latest session")
+    return _build_landmarks_csv_from_frames(frames, mode=exercise)
