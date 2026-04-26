@@ -106,19 +106,6 @@ function modeForExercise(e: ExerciseType): SessionMode {
   return e === 'walking' ? 'walking' : 'standing';
 }
 
-/** Maps prescribed exercise to SLS vs LSDT feedback tables. */
-function feedbackExerciseType(ex: ExerciseType): 'sls' | 'lsdt' {
-  return ex === 'leftLsd' || ex === 'rightLsd' ? 'lsdt' : 'sls';
-}
-
-/** Coarse live quality label from how many error flags fired in the window. */
-function liveErrorsToClassification(errors: RepErrors): string {
-  const n = Object.values(errors).filter(Boolean).length;
-  if (n <= 1) return 'good';
-  if (n <= 3) return 'fair';
-  return 'poor';
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -144,6 +131,7 @@ export default function SessionScreen() {
   const completedEntriesRef  = useRef<SessionExerciseEntry[]>([]);
   const framesByExerciseRef  = useRef<{ exercise: string; frames: ReturnType<ExercisePipeline['getFrameBuffer']> }[]>([]);
   const walkingRecordedFramesRef = useRef<RecordedFrame[]>([]);  // for analyzeRecording dashboard data
+  const calibrationBatchIdRef = useRef<string | null>(null);
 
   const pipelineRef     = useRef<ExercisePipeline | null>(null);
   const profileRef      = useRef<UserProfile | null>(null);
@@ -277,6 +265,9 @@ export default function SessionScreen() {
       Alert.alert('No exercises prescribed', 'This patient has no curr_program entries.');
       return;
     }
+    calibrationBatchIdRef.current = programStartsWithCalibration(patient.curr_program)
+      ? newCalibrationBatchId()
+      : null;
     sessionIdRef.current = new Date().toISOString();
     sessionStartedAtRef.current = Date.now();
     completedEntriesRef.current = [];
@@ -369,15 +360,30 @@ export default function SessionScreen() {
       let uploadedCount = 0;
       const backendErrors: string[] = [];
       for (const [i, entry] of entries.entries()) {
+        const frames = framesByExerciseRef.current[i]?.frames ?? [];
+        const mode = modeForExercise(entry.exercise as ExerciseType);
+        const recorded: RecordedFrame[] = frames.map(f => ({
+          t: f.timestamp,
+          pose: f.landmarks as unknown as PoseFrame,
+        }));
+        const perExerciseFramesCsv = buildLandmarkCsv(recorded, mode);
+
+        const step = calibrationStepForExercise(entry.exercise);
+        const calibration =
+          calibrationBatchIdRef.current && step
+            ? { batchId: calibrationBatchIdRef.current, step }
+            : undefined;
+
         const exercisePayload = buildExportPayload(
           `${sessionId}-${entry.exercise}-${i + 1}`,
           entry.startedAtMs,
           entry.endedAtMs,
           entry.summary,
-          framesByExerciseRef.current[i]?.frames ?? [],
+          frames,
           patientId,
+          calibration,
         );
-        const backendRes = await postSessionToBackend(BACKEND_URL, exercisePayload);
+        const backendRes = await postSessionToBackend(BACKEND_URL, exercisePayload, perExerciseFramesCsv);
         if (backendRes.ok) uploadedCount += 1;
         else {
           backendErrors.push(displayErrorDetail(backendRes.detail ?? backendRes.error));
