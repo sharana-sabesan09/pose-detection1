@@ -8,7 +8,14 @@ import {
   fetchPatientOverview,
 } from '../engine/backendClient';
 import { loadStoredProfile } from '../engine/profileStorage';
-import { PaperBackground, ScreenHeader, SketchBox, SketchCircle, Squiggle, TagPill } from '../sentinel/primitives';
+import {
+  PaperBackground,
+  ScreenHeader,
+  SketchBox,
+  SketchCircle,
+  Squiggle,
+  TagPill,
+} from '../sentinel/primitives';
 import { COLORS, FONTS, formatMonthDay } from '../sentinel/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DoctorReview'>;
@@ -26,20 +33,7 @@ type TimelineNote = {
 
 export default function DoctorReviewScreen({ navigation }: Props) {
   const [latestReport, setLatestReport] = useState<LatestReport>(null);
-  const [timelineNotes, setTimelineNotes] = useState<TimelineNote[]>([
-    {
-      date: 'Apr 15',
-      body: 'Knee flexion ROM looking good. Cleared for full body-weight squat to 90°.',
-    },
-    {
-      date: 'Apr 08',
-      body: 'Reduce single-leg balance time to 20s. Form > duration.',
-    },
-    {
-      date: 'Mar 31',
-      body: 'Welcome aboard. Phase: sub-acute. Hold compressive sleeve during ADLs.',
-    },
-  ]);
+  const [timelineNotes, setTimelineNotes] = useState<TimelineNote[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -66,13 +60,14 @@ export default function DoctorReviewScreen({ navigation }: Props) {
                 date: formatMonthDay(session.started_at),
                 body: session.summary ?? '',
               }));
-            if (notes.length) {
-              setTimelineNotes(notes);
-            }
+            setTimelineNotes(notes);
+          } else {
+            setTimelineNotes([]);
           }
         } catch {
           if (!cancelled) {
             setLatestReport(null);
+            setTimelineNotes([]);
           }
         }
       };
@@ -86,18 +81,16 @@ export default function DoctorReviewScreen({ navigation }: Props) {
 
   const summary =
     latestReport?.summary ??
-    "Strong week - gait regularity is up to 82 from 71. The lateral sway during your walking sets is the next thing to chip at. I'd like you to add the hip airplane drill before squats. Reduce step-up height to 12 cm until pain settles below 3/10.";
-  const chips = latestReport?.recommendations?.length
-    ? latestReport.recommendations.slice(0, 3)
-    : ['+ Hip airplane', 'Reduce step-up height', 'Pain target <= 3'];
+    'No reviewed clinical note is available yet. This screen updates after a grounded session report is stored.';
+  const chips = latestReport?.recommendations?.slice(0, 3) ?? [];
 
   return (
     <View style={styles.root}>
       <PaperBackground />
       <ScreenHeader
         onBack={() => navigation.goBack()}
-        title="From Dr. Adler"
-        subtitle="reviewed Apr 22"
+        title="Clinical review"
+        subtitle={latestReport ? 'latest recorded note' : 'no reviewed note yet'}
       />
       <ScrollView
         contentContainerStyle={styles.content}
@@ -110,50 +103,58 @@ export default function DoctorReviewScreen({ navigation }: Props) {
         >
           <View style={styles.heroHeader}>
             <SketchCircle size={48} seed={223} fill="rgba(28,38,50,0.06)">
-              <Text style={styles.avatarText}>A</Text>
+              <Text style={styles.avatarText}>R</Text>
             </SketchCircle>
             <View>
-              <Text style={styles.heroTitle}>Dr. M. Adler</Text>
-              <Text style={styles.heroSub}>orthopaedic PT - Boston</Text>
+              <Text style={styles.heroTitle}>Latest report</Text>
+              <Text style={styles.heroSub}>grounded session output</Text>
             </View>
             <View style={styles.flex} />
-            <TagPill label={latestReport ? 'latest' : '2 new'} accent />
+            <TagPill label={latestReport ? 'latest' : 'awaiting data'} accent />
           </View>
           <Squiggle width={120} />
           <Text style={styles.summary}>{summary}</Text>
-          <View style={styles.chips}>
-            {chips.map(chip => (
-              <TagPill key={chip} label={chip} />
-            ))}
-          </View>
+          {chips.length > 0 ? (
+            <View style={styles.chips}>
+              {chips.map(chip => (
+                <TagPill key={chip} label={chip} />
+              ))}
+            </View>
+          ) : null}
         </SketchBox>
 
         <Text style={styles.sectionLabel}>EARLIER NOTES</Text>
-        {timelineNotes.map((note, index) => (
-          <View key={`${note.date}-${index}`} style={styles.noteWrap}>
-            <SketchBox
-              seed={300 + index * 7}
-              style={styles.noteCard}
-              fill="rgba(255,250,235,0.4)"
-            >
-              <View style={styles.noteHeader}>
-                <Text style={styles.noteDate}>{note.date}</Text>
-                <Text style={styles.noteBadge}>NOTE</Text>
-              </View>
-              <Text style={styles.noteBody}>{note.body}</Text>
-            </SketchBox>
-          </View>
-        ))}
+        {timelineNotes.length > 0 ? (
+          timelineNotes.map((note, index) => (
+            <View key={`${note.date}-${index}`} style={styles.noteWrap}>
+              <SketchBox
+                seed={300 + index * 7}
+                style={styles.noteCard}
+                fill="rgba(255,250,235,0.4)"
+              >
+                <View style={styles.noteHeader}>
+                  <Text style={styles.noteDate}>{note.date}</Text>
+                  <Text style={styles.noteBadge}>NOTE</Text>
+                </View>
+                <Text style={styles.noteBody}>{note.body}</Text>
+              </SketchBox>
+            </View>
+          ))
+        ) : (
+          <SketchBox
+            seed={499}
+            style={styles.emptyNote}
+            fill="rgba(255,250,235,0.35)"
+          >
+            <Text style={styles.emptyNoteText}>
+              Earlier reviewed notes appear here after recorded sessions generate summaries.
+            </Text>
+          </SketchBox>
+        )}
 
-        <SketchBox
-          seed={499}
-          style={styles.messageButton}
-          fill="transparent"
-          stroke={COLORS.ink}
-          strokeWidth={1.6}
-        >
-          <Text style={styles.messageText}>Send a message to Dr. Adler {'->'}</Text>
-        </SketchBox>
+        <Text style={styles.infoText}>
+          In-app clinician messaging is not available in this build.
+        </Text>
       </ScrollView>
     </View>
   );
@@ -246,14 +247,21 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     color: COLORS.ink2,
   },
-  messageButton: {
-    marginTop: 14,
+  emptyNote: {
+    paddingHorizontal: 14,
     paddingVertical: 14,
-    alignItems: 'center',
   },
-  messageText: {
-    fontFamily: FONTS.handBold,
-    fontSize: 16,
-    color: COLORS.ink,
+  emptyNoteText: {
+    fontFamily: FONTS.hand,
+    fontSize: 14,
+    lineHeight: 21,
+    color: COLORS.inkFaint,
+  },
+  infoText: {
+    marginTop: 14,
+    textAlign: 'center',
+    fontFamily: FONTS.hand,
+    fontSize: 12,
+    color: COLORS.inkFaint,
   },
 });
