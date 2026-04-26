@@ -32,9 +32,9 @@ export const COLORS = {
 
 export const FONTS = {
   display: Platform.select({
-    ios: 'Caveat',
+    ios: 'Caveat-Regular',
     android: 'Caveat',
-    default: 'Caveat',
+    default: 'Caveat-Regular',
   }),
   hand: Platform.select({
     ios: 'Kalam-Regular',
@@ -47,9 +47,9 @@ export const FONTS = {
     default: 'Kalam-Bold',
   }),
   mono: Platform.select({
-    ios: 'JetBrainsMono',
+    ios: 'JetBrainsMono-Regular',
     android: 'JetBrainsMono',
-    default: 'JetBrainsMono',
+    default: 'JetBrainsMono-Regular',
   }),
 };
 

@@ -156,6 +156,15 @@ class ExerciseSessionArtifact(Base):
     size_bytes = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    __table_args__ = (
+        Index(
+            "ix_exercise_session_artifacts_session_type_created",
+            "exercise_session_id",
+            "artifact_type",
+            "created_at",
+        ),
+    )
+
     exercise_session = relationship("ExerciseSession", back_populates="artifacts")
 
 

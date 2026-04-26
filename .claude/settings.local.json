@@ -27,7 +27,9 @@
       "Bash(unzip -o Sentinel-handoff.zip -d /tmp/sentinel-handoff)",
       "Bash(npx tsc *)",
       "Bash(xxd)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "WebFetch(domain:api.anthropic.com)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\HP1\\\\.claude\\\\projects\\\\D--pose-detection1\\\\6b15c5a1-9e40-4760-b824-57a788eae36f\\\\tool-results\\\\design_extracted\" -Recurse | ForEach-Object { $_.FullName.Replace\\(\"C:\\\\Users\\\\HP1\\\\.claude\\\\projects\\\\D--pose-detection1\\\\6b15c5a1-9e40-4760-b824-57a788eae36f\\\\tool-results\\\\design_extracted\\\\\", \"\"\\) })"
     ]
   }
 }

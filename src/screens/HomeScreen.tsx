@@ -207,7 +207,7 @@ export default function HomeScreen({ navigation }: Props) {
               stroke={COLORS.warmDeep}
               strokeWidth={1.6}
             >
-              <Text style={styles.streakText}>3-day streak *</Text>
+              <Text style={styles.streakText}>3-day streak ★</Text>
             </SketchBox>
           </View>
         </View>
@@ -297,7 +297,7 @@ export default function HomeScreen({ navigation }: Props) {
               </Text>
             </View>
             <View style={styles.faceRow}>
-              {['^_^', '-_-', 'o_o', '>_<'].map((face, index) => (
+              {['◠‿◠', '◡◡', '◔◔', '◠︿◠'].map((face, index) => (
                 <Pressable key={face} onPress={() => setMood(index)}>
                   <SketchCircle
                     size={32}
@@ -415,7 +415,9 @@ function NavCard({
               {badge ? <View style={styles.badge}><Text style={styles.badgeText}>{badge}</Text></View> : null}
             </View>
           </View>
-          <Text style={styles.navChevron}>〉</Text>
+          <Svg width={20} height={20} viewBox="0 0 24 24">
+            <Path d="M8 4 Q 17 11, 20 12 Q 17 13, 8 20" stroke={COLORS.ink} strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          </Svg>
         </View>
       </SketchBox>
     </Pressable>
@@ -564,6 +566,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -16,
     left: 14,
+    transform: [{ rotate: '-3deg' }],
   },
   streakBox: {
     paddingHorizontal: 10,
@@ -609,7 +612,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   metricSmall: {
-    marginTop: 6,
+    marginTop: 2,
     fontFamily: FONTS.hand,
     fontSize: 11,
   },
@@ -707,10 +710,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: COLORS.paper,
     letterSpacing: 0.5,
-  },
-  navChevron: {
-    fontSize: 24,
-    color: COLORS.ink,
   },
   footer: {
     marginTop: 28,
