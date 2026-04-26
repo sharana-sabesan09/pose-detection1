@@ -6,7 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import AccumulatedScore, ExerciseSession, Patient, Session, SessionScore, Summary
 from db.session import get_db
+from agents.patient_advisor import run_patient_advisor
 from routers.auth import require_jwt
+from schemas.advice import PatientAdviceRequest, PatientAdviceResponse
 from schemas.patient import (
     AccumulatedScoresResponse,
     PatientOverviewResponse,
@@ -160,3 +162,15 @@ async def get_patient_overview(
         ),
         recent_sessions=recent_sessions,
     )
+
+
+@router.post("/{patient_id}/advice", response_model=PatientAdviceResponse)
+async def ask_patient_advice(
+    patient_id: str,
+    body: PatientAdviceRequest,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_jwt),
+):
+    output = await run_patient_advisor(patient_id, body.question, db)
+    await db.commit()
+    return output

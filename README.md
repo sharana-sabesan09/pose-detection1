@@ -104,11 +104,22 @@ local phone storage:
 The phone still keeps a local analysis cache for offline fallback, but the
 authoritative patient timeline now lives in the backend.
 
+Patients can also ask a backend-backed guidance question through
+`POST /patients/{patientId}/advice`. That path uses the patient's metadata,
+recent session summaries, recent risk/ROM scores, and any accumulated score
+history to produce a conservative, non-diagnostic answer with next steps and
+urgent escalation flags.
+
 ---
 
 ## Backend Agent Pipeline
 
 Each agent is a proper Fetch.ai **uAgent** with its own identity, running inside a shared `Bureau`. The `physio-orchestrator` is the only agent exposed to Agentverse (via mailbox key); sub-agents are local and communicate via typed messages.
+
+The active backend agent set now includes a patient-facing `patient_advisor`
+agent in addition to the PT and exercise pipeline agents. That agent answers
+questions like "my knee hurts after today's session, what should I do?" using
+stored patient/session context rather than generic advice alone.
 
 ### Two execution paths
 
