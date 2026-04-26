@@ -113,6 +113,33 @@ export const POSE_HTML = `
       [11,13],[13,15],[12,14],[14,16],
     ];
 
+    /** Half-width multiplier per bone pair (1 = base); thinner distal limbs, wider torso/hips. */
+    function ghostLimbHalfWMult(a, b) {
+      const lo = a < b ? a : b;
+      const hi = a < b ? b : a;
+      const key = lo + '-' + hi;
+      const m = {
+        '11-12': 1.2,
+        '11-23': 1.02, '12-24': 1.02,
+        '23-24': 1.28,
+        '23-25': 1.1, '24-26': 1.1,
+        '25-27': 0.66, '26-28': 0.66,
+        '27-29': 0.45, '28-30': 0.45,
+        '11-13': 0.78, '12-14': 0.78,
+        '13-15': 0.52, '14-16': 0.52,
+      };
+      return m[key] != null ? m[key] : 1;
+    }
+
+    const GHOST_JOINT_R_MULT = {
+      11: 1.14, 12: 1.14,
+      13: 1.02, 14: 1.02,
+      15: 0.72, 16: 0.72,
+      23: 1.18, 24: 1.18,
+      25: 1.05, 26: 1.05,
+      27: 0.82, 28: 0.82,
+    };
+
     // RN injects the current exercise after the page loads. Default to hidden so
     // the screen never flashes an outdated calibration ghost on boot/remount.
     let ghostExercise = 'walking';
@@ -196,7 +223,7 @@ export const POSE_HTML = `
       for (const i of GHOST_JOINT_IDX) acc(frame[i]);
       acc(frame[0]);
       if (minX === Infinity) return null;
-      const pad = 28;
+      const pad = 40;
       return { minX: minX - pad, maxX: maxX + pad, minY: minY - pad, maxY: maxY + pad };
     }
 
@@ -217,7 +244,7 @@ export const POSE_HTML = `
     }
 
     function drawGhostInTrainerPanel(
-      frame, vw, vh, sc, ox, oy, W, H, halfW, jointR,
+      frame, vw, vh, sc, ox, oy, W, H, baseLimbHalf, jointRBase,
       panelX, panelY, panelW, panelH, innerPad,
     ) {
       const bb = ghostBBoxScreenPx(frame, vw, vh, sc, ox, oy, W, H);
@@ -234,30 +261,40 @@ export const POSE_HTML = `
       ctx.translate(panelX + panelW / 2, panelY + panelH / 2);
       ctx.scale(s, s);
       ctx.translate(-cx, -cy);
-      drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, halfW, jointR);
+      drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, baseLimbHalf, jointRBase);
       ctx.restore();
     }
 
-    function drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, halfW, jointR) {
+    function drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, baseLimbHalf, jointRBase) {
       ctx.globalAlpha = 1;
       ctx.fillStyle = GHOST_FILL_GREEN;
       for (const [a, b] of GHOST_CONNECTIONS) {
         const pa = ghostPx(frame[a], vw, vh, sc, ox, oy, W, H);
         const pb = ghostPx(frame[b], vw, vh, sc, ox, oy, W, H);
         if (pa.v < 0.2 || pb.v < 0.2) continue;
-        fillLimbCapsule(ctx, pa.x, pa.y, pb.x, pb.y, halfW);
+        const hw = baseLimbHalf * ghostLimbHalfWMult(a, b);
+        fillLimbCapsule(ctx, pa.x, pa.y, pb.x, pb.y, hw);
       }
       for (const i of GHOST_JOINT_IDX) {
         const p = ghostPx(frame[i], vw, vh, sc, ox, oy, W, H);
         if (p.v < 0.2) continue;
+        const jr = jointRBase * (GHOST_JOINT_R_MULT[i] != null ? GHOST_JOINT_R_MULT[i] : 1);
         ctx.beginPath();
-        ctx.arc(p.x, p.y, jointR, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, jr, 0, Math.PI * 2);
         ctx.fill();
       }
+      const p11 = ghostPx(frame[11], vw, vh, sc, ox, oy, W, H);
+      const p12 = ghostPx(frame[12], vw, vh, sc, ox, oy, W, H);
       const nose = ghostPx(frame[0], vw, vh, sc, ox, oy, W, H);
+      if (nose.v >= 0.2 && p11.v >= 0.2 && p12.v >= 0.2) {
+        const mx = (p11.x + p12.x) / 2;
+        const my = (p11.y + p12.y) / 2;
+        fillLimbCapsule(ctx, nose.x, nose.y, mx, my, baseLimbHalf * 0.4);
+      }
       if (nose.v >= 0.2) {
+        const headR = Math.max(jointRBase * 1.75, baseLimbHalf * 2.25);
         ctx.beginPath();
-        ctx.arc(nose.x, nose.y, halfW * 1.35, 0, Math.PI * 2);
+        ctx.arc(nose.x, nose.y, headR, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -284,8 +321,8 @@ export const POSE_HTML = `
         ghostTransitionStartMs = now;
       }
 
-      const halfW = Math.max(12, Math.min(W, H) * 0.02);
-      const jointR = halfW * 1.15;
+      const baseLimbHalf = Math.max(9, Math.min(W, H) * 0.0155);
+      const jointRBase = baseLimbHalf * 1.12;
       const rects = ghostPanelRects(W, H);
       const padFull = 40;
       const padCorner = 12;
@@ -293,7 +330,7 @@ export const POSE_HTML = `
       if (ghostLayoutStage === 'fullscreen') {
         const r = rects.fullscreen;
         drawGhostInTrainerPanel(
-          frame, vw, vh, scale, offsetX, offsetY, W, H, halfW, jointR,
+          frame, vw, vh, scale, offsetX, offsetY, W, H, baseLimbHalf, jointRBase,
           r.x, r.y, r.w, r.h, padFull,
         );
       } else if (ghostLayoutStage === 'transition') {
@@ -311,13 +348,13 @@ export const POSE_HTML = `
         const rh = A.h + (B.h - A.h) * u;
         const innerPad = padFull + (padCorner - padFull) * u;
         drawGhostInTrainerPanel(
-          frame, vw, vh, scale, offsetX, offsetY, W, H, halfW, jointR,
+          frame, vw, vh, scale, offsetX, offsetY, W, H, baseLimbHalf, jointRBase,
           rx, ry, rw, rh, innerPad,
         );
       } else if (ghostLayoutStage === 'corner') {
         const r = rects.corner;
         drawGhostInTrainerPanel(
-          frame, vw, vh, scale, offsetX, offsetY, W, H, halfW, jointR,
+          frame, vw, vh, scale, offsetX, offsetY, W, H, baseLimbHalf, jointRBase,
           r.x, r.y, r.w, r.h, padCorner,
         );
       }
