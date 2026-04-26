@@ -84,6 +84,21 @@ stores per-rep rows in `rep_analyses`, stores the uploaded CSV artifacts in
 parses frame-feature rows into `pose_frames` via the linked companion
 `sessions` row.
 
+### Raw landmark frames (for overlay rendering)
+
+For the overlay product (reference pose vs the most recent user session), the
+backend must also receive **raw MediaPipe landmark frames** (`frames.csv` from
+`buildLandmarkCsv`, with columns `lm0_x..lm32_v`). Those are uploaded as
+`framesCsv` in `POST /sessions/exercise-result` and stored into:
+
+- `pose_frames.landmarks_json` (per frame), for querying + rendering
+- `exercise_sessions.frames_csv` (optional copy of the original CSV)
+
+The backend also exposes:
+
+- `GET /sessions/latest/frames.csv?exercise=<exercise>`
+  - returns the latest stored landmark CSV for that exercise from Postgres
+
 `POST /exports/session` remains available only as a dev-only local artifact
 dump. It is no longer the primary mobile upload path.
 
@@ -213,6 +228,79 @@ The `backend/Dockerfile` and `backend/railway.toml` handle the build. Before dep
 Railway runs `alembic upgrade head` as a release command before cutting over traffic, so migrations are applied automatically on each deploy. Health check at `GET /health`.
 
 For more detail see [`backend/BACKEND.md`](backend/BACKEND.md).
+
+---
+
+## Overlay rendering (developer tool)
+
+This repo includes lightweight tooling to:
+- extract a **reference** `frames.csv` from a reference MP4 (MediaPipe PoseLandmarker)
+- render a **silhouette overlay** MP4 from a user `frames.csv` and reference `frames.csv`
+- (optionally) pull the **latest session** from the backend and render it
+
+### 1) Extract references from MP4
+
+```bash
+source .venv-render/bin/activate
+
+python tools/extract_reference_from_video.py \
+  --video "/Users/suryasivakumar/Downloads/single_leg_squat_reference.mp4" \
+  --out "references/single_leg_squat/frames.csv" \
+  --mode single_leg_squat_ref
+
+python tools/extract_reference_from_video.py \
+  --video "/Users/suryasivakumar/Downloads/lateral_step_down.mp4" \
+  --out "references/lateral_step_down/frames.csv" \
+  --mode lateral_step_down_ref
+```
+
+### 2) Render overlay locally (CSV → MP4)
+
+```bash
+source .venv-render/bin/activate
+
+python tools/render_overlay.py \
+  --frames exports/surya_0507/frames.csv \
+  --reference_frames references/single_leg_squat/frames.csv \
+  --out exports/surya_0507/overlay.mp4 \
+  --smooth_user
+```
+
+### 3) Render overlay from the latest Postgres session
+
+Backend must be running and reachable, and you need a JWT access token:
+
+```bash
+source .venv-render/bin/activate
+
+python tools/render_latest_from_server.py \
+  --base_url http://127.0.0.1:8000 \
+  --exercise single_leg_squat \
+  --token "<JWT>" \
+  --out exports/latest_single_leg_squat.mp4
+```
+
+#### Getting a JWT (dev)
+
+The mobile app mints a token by calling `POST /auth/token`. You can do the same:
+
+```bash
+TOKEN="$(curl -sS -X POST http://127.0.0.1:8000/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"mobile-app","role":"mobile"}' \
+  | python3 -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')"
+echo "${TOKEN:0:24}..."
+```
+
+Then pass it into the renderer:
+
+```bash
+python tools/render_latest_from_server.py \
+  --base_url http://127.0.0.1:8000 \
+  --exercise lateral_step_down \
+  --token "$TOKEN" \
+  --out exports/latest_lateral_step_down.mp4
+```
 
 ---
 
