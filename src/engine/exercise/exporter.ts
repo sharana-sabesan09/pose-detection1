@@ -37,7 +37,14 @@ import { buildFrameDebugCsv, buildRepsCsv } from './csvWriter';
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface SessionExportPayload {
-  sessionId:    string;
+  /** Synthetic per-exercise id — `<visitId>-<exercise>-<i>`. Sent to the
+   *  backend as `sessionId` for backward compatibility with older clients. */
+  exerciseId:   string;
+  /** Top-level MultiExerciseSession.sessionId — shared across all exercises
+   *  in this visit. Sent to the backend as `visitId`. */
+  visitId:      string;
+  /** Per-exercise injured-joint ROM carve-out (or null for walking / unknown). */
+  injuredJointRom: { joint: string; rom: number | null } | null;
   startedAtMs:  number;
   endedAtMs:    number;
   durationMs:   number;
@@ -59,13 +66,13 @@ export interface SessionExportPayload {
  * Pretty-printed because the user is going to read it on a laptop.
  */
 export function buildSessionJson(
-  sessionId: string,
+  exerciseId: string,
   startedAtMs: number,
   endedAtMs: number,
   summary: SessionSummary,
 ): string {
   const doc = {
-    sessionId,
+    sessionId:  exerciseId,
     startedAtMs,
     endedAtMs,
     durationMs: Math.max(0, endedAtMs - startedAtMs),
@@ -82,7 +89,9 @@ export function buildRepsJsonl(reps: RepFeatures[]): string {
 }
 
 export function buildExportPayload(
-  sessionId: string,
+  exerciseId: string,
+  visitId: string,
+  injuredJointRom: { joint: string; rom: number | null } | null,
   startedAtMs: number,
   endedAtMs: number,
   summary: SessionSummary,
@@ -90,7 +99,9 @@ export function buildExportPayload(
   patientId?: string | null,
 ): SessionExportPayload {
   return {
-    sessionId,
+    exerciseId,
+    visitId,
+    injuredJointRom,
     startedAtMs,
     endedAtMs,
     durationMs: Math.max(0, endedAtMs - startedAtMs),
@@ -118,13 +129,38 @@ export function buildExportPayload(
  * recording window. This is the per-exercise sub-document that gets
  * appended to MultiExerciseSession.exercises[].
  */
+/**
+ * Compute the per-exercise ROM number for one finished entry. Mirrors
+ * computeRomByExercise but for a single SessionSummary so we can attach
+ * it directly to the entry as it finishes (no second pass needed).
+ *
+ * Returns null for walking (which doesn't measure joint ROM). For
+ * rep-based exercises that ran but produced no reps, returns
+ * `{ joint, rom: null }` so the field still exists for longitudinal
+ * tracking continuity.
+ */
+function computeInjuredJointRomForEntry(
+  summary: SessionSummary,
+  injuredJointName: string,
+): { joint: string; rom: number | null } | null {
+  if (summary.exercise === 'walking') return null;
+  const reps = summary.reps;
+  if (reps.length === 0) return { joint: injuredJointName, rom: null };
+  const sum = reps.reduce((s, r) => s + r.features.romRatio, 0);
+  return { joint: injuredJointName, rom: sum / reps.length };
+}
+
 export function buildSessionExerciseEntry(
   summary: SessionSummary,
   startedAtMs: number,
   endedAtMs: number,
+  visitId: string,
+  injuredJointName: string,
 ): SessionExerciseEntry {
   return {
     exercise:    summary.exercise,
+    visitId,
+    injuredJointRom: computeInjuredJointRomForEntry(summary, injuredJointName),
     startedAtMs,
     endedAtMs,
     durationMs:  Math.max(0, endedAtMs - startedAtMs),
@@ -296,7 +332,7 @@ async function getBackendToken(baseUrl: string, timeoutMs: number): Promise<stri
  *
  * Pass null/empty baseUrl to disable. Trailing slashes on baseUrl are fine.
  */
-export async function postSessionToBackend(
+export async function postExerciseToBackend(
   baseUrl: string | null | undefined,
   payload: SessionExportPayload,
   framesCsv?: string,
@@ -319,7 +355,12 @@ export async function postSessionToBackend(
         Authorization: `Bearer ${token}`,
       },
       body:    JSON.stringify({
-        sessionId: payload.sessionId,
+        // `sessionId` is the legacy field name on the backend body — it
+        // carries the synthetic per-exercise id. `visitId` is the new
+        // shared-across-the-visit identifier.
+        sessionId: payload.exerciseId,
+        visitId: payload.visitId,
+        injuredJointRom: payload.injuredJointRom,
         startedAtMs: payload.startedAtMs,
         endedAtMs: payload.endedAtMs,
         durationMs: payload.durationMs,
@@ -386,9 +427,9 @@ export async function postSessionToLocalExports(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session_id: payload.sessionId,
+        session_id: payload.exerciseId,
         summary_json: buildSessionJson(
-          payload.sessionId,
+          payload.exerciseId,
           payload.startedAtMs,
           payload.endedAtMs,
           payload.summary,
@@ -475,15 +516,15 @@ export async function shareSessionViaSheet(
   body?: string,
 ): Promise<{ ok: boolean; action?: string; error?: string }> {
   const message = body ?? buildSessionJson(
-    payload.sessionId,
+    payload.exerciseId,
     payload.startedAtMs,
     payload.endedAtMs,
     payload.summary,
   );
   try {
     const result = await Share.share(
-      { message, title: `sentinel-${payload.sessionId}.json` },
-      { subject: `Sentinel session ${payload.sessionId}` },
+      { message, title: `sentinel-${payload.exerciseId}.json` },
+      { subject: `Sentinel exercise ${payload.exerciseId}` },
     );
     return { ok: result.action !== Share.dismissedAction, action: result.action };
   } catch (e) {
@@ -492,24 +533,23 @@ export async function shareSessionViaSheet(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Multi-exercise session POST + share
+// Multi-exercise session — archive POST + local export + share
 //
-// TODO (backend): the existing /sessions/exercise-result route was built for
-// the single-SessionSummary payload. The new multi-session payload below
-// nests an `exercises` array; the backend needs a corresponding handler that
-// fans out to the exercise_sessions / rep_analyses tables once per entry,
-// AND persists the patient.injuredJoint.romByExercise field for longitudinal
-// tracking. Until that ships, this function will receive 4xx from the route.
+// The whole MultiExerciseSession payload is archived once per visit via
+// POST /sessions/multi-exercise-archive. The current backend ingest path
+// does NOT read that table back — it exists for a future longitudinal
+// agent. Per-exercise rows continue to be sent one at a time through
+// postExerciseToBackend; this archive call is fire-and-forget on top.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function postMultiSessionToBackend(
+export async function postMultiExerciseArchiveToBackend(
   baseUrl: string | null | undefined,
-  payload: MultiSessionExportPayload,
-  timeoutMs = 20000,
+  session: MultiExerciseSession,
+  timeoutMs = 15000,
 ): Promise<BackendExportResult> {
   if (!baseUrl) return { ok: false, error: 'no backend URL configured' };
 
-  const url = baseUrl.replace(/\/+$/, '') + '/sessions/exercise-result';
+  const url = baseUrl.replace(/\/+$/, '') + '/sessions/multi-exercise-archive';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -522,14 +562,12 @@ export async function postMultiSessionToBackend(
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        sessionId:        payload.session.sessionId,
-        startedAtMs:      payload.session.startedAtMs,
-        endedAtMs:        payload.session.endedAtMs,
-        durationMs:       payload.session.durationMs,
-        patient:          payload.session.patient,
-        exercises:        payload.session.exercises,
-        repsCsv:          payload.repsCsv,
-        frameFeaturesCsv: payload.frameFeaturesCsv,
+        visitId:     session.sessionId,
+        startedAtMs: session.startedAtMs,
+        endedAtMs:   session.endedAtMs,
+        durationMs:  session.durationMs,
+        patientId:   session.patient.patientId,
+        payload:     session,
       }),
       signal: controller.signal,
     });
@@ -549,8 +587,8 @@ export async function postMultiSessionToBackend(
         error: detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`,
       };
     }
-    const data = await res.json().catch(() => ({}));
-    return { ok: true, status: res.status, id: data?.id, linkedSessionId: data?.linkedSessionId };
+    await res.json().catch(() => ({}));
+    return { ok: true, status: res.status };
   } catch (e) {
     clearTimeout(timer);
     cachedAccessToken = null;

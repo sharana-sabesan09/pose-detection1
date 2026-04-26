@@ -6,6 +6,11 @@ chain for exercise data.  The mobile app already computes 12 biomechanical
 features per rep with per-rep confidence scores; this agent reads that data
 natively instead of re-deriving a subset from raw pose frames.
 
+Note: ``visit_id`` is now available on Exercise rows for grouping the N
+exercises produced by one recording visit. This agent still runs once per
+exercise upload — visit-level rollups are reserved for the future
+longitudinal report agent that will read multi_exercise_sessions.
+
 Pipeline:
   1. Filter reps: confidence >= MIN_CONFIDENCE, durationMs >= MIN_DURATION_MS
   2. Guard hipAdductionPeak == 0  (landmark-loss sentinel — treat as missing)
@@ -29,7 +34,7 @@ from agents.hipaa import hipaa_wrap
 from agents._client import gemini_client as _client, GEMINI_MODEL as _MODEL
 from db.models import Session, SessionScore, Summary
 from rag.retriever import retrieve_clinical_context
-from schemas.exercise import ExerciseSessionResult
+from schemas.exercise import ExerciseResult
 from schemas.session import ExerciseReporterOutput
 from utils.audit import write_audit
 
@@ -55,7 +60,7 @@ def _safe_std(values: list[float]) -> float | None:
     return statistics.stdev(clean) if len(clean) >= 2 else None
 
 
-def _compute_exercise_stats(result: ExerciseSessionResult) -> dict:
+def _compute_exercise_stats(result: ExerciseResult) -> dict:
     """
     Filter reps, guard sentinel values, compute aggregate stats.
 
@@ -176,7 +181,7 @@ def _compute_exercise_stats(result: ExerciseSessionResult) -> dict:
 
 
 async def run_exercise_reporter(
-    result: ExerciseSessionResult,
+    result: ExerciseResult,
     session_id: str,
     patient_id: str | None,
     db: AsyncSession,

@@ -10,7 +10,7 @@ from agents.progress import run_progress
 from utils.audit import write_audit
 from sqlalchemy import select, func
 from db.models import Session
-from schemas.exercise import ExerciseSessionResult
+from schemas.exercise import ExerciseResult
 
 logger = logging.getLogger(__name__)
 
@@ -93,12 +93,16 @@ async def run_session_pipeline(
 
 
 async def run_exercise_pipeline(
-    result: ExerciseSessionResult,
+    result: ExerciseResult,
     session_id: str,
     patient_id: str | None,
 ) -> dict:
     """
     Exercise session pipeline — runs the exercise_reporter directly from mobile data.
+
+    Note: ``visit_id`` is available on Exercise rows for grouping the N
+    exercises produced by one recording visit. This pipeline still runs
+    once per exercise upload (unchanged behaviour).
 
     Creates its own db session because it runs as an asyncio background task
     after the HTTP 201 response has already been returned to the mobile app.

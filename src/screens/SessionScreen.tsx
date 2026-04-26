@@ -51,7 +51,8 @@ import {
   buildSessionExerciseEntry,
   buildMultiExerciseSession,
   buildMultiSessionExportPayload,
-  postSessionToBackend,
+  postExerciseToBackend,
+  postMultiExerciseArchiveToBackend,
   postMultiSessionToLocalExports,
   shareMultiSessionViaSheet,
 } from '../engine/exercise/exporter';
@@ -248,7 +249,11 @@ export default function SessionScreen() {
     const endedAt   = Date.now();
     try {
       const summary = pipe.finalize();
-      completedEntriesRef.current.push(buildSessionExerciseEntry(summary, startedAt, endedAt));
+      const visitId = sessionIdRef.current;
+      const injuredJointName = patient?.injuredjoint ?? 'unknown';
+      completedEntriesRef.current.push(
+        buildSessionExerciseEntry(summary, startedAt, endedAt, visitId, injuredJointName),
+      );
       framesByExerciseRef.current.push({ exercise: ex, frames: pipe.getFrameBuffer() });
       console.log(`[session] ${ex}: ${summary.reps.length} reps,`, JSON.stringify(summary.summary));
     } catch (e) {
@@ -309,32 +314,42 @@ export default function SessionScreen() {
         console.warn('[export] local artifact write failed:', localRes.error);
       }
 
-      // 3. Backend POST (current backend expects single-exercise payloads).
-      // Fan out one request per exercise entry in this session.
+      // 3. Backend POST — fan out one request per exercise entry, all
+      // tagged with the same visitId so the backend can group them.
       let uploadedCount = 0;
       const backendErrors: string[] = [];
       for (const [i, entry] of entries.entries()) {
         const exercisePayload = buildExportPayload(
           `${sessionId}-${entry.exercise}-${i + 1}`,
+          sessionId,
+          entry.injuredJointRom,
           entry.startedAtMs,
           entry.endedAtMs,
           entry.summary,
           framesByExerciseRef.current[i]?.frames ?? [],
           patientId,
         );
-        const backendRes = await postSessionToBackend(BACKEND_URL, exercisePayload);
+        const backendRes = await postExerciseToBackend(BACKEND_URL, exercisePayload);
         if (backendRes.ok) uploadedCount += 1;
         else {
           backendErrors.push(displayErrorDetail(backendRes.detail ?? backendRes.error));
         }
       }
 
+      // 4. Whole-visit archive — fire-and-forget. Failure here is non-fatal:
+      // the per-exercise uploads above are the source of truth for current
+      // agents, the archive only feeds future longitudinal work.
+      const archiveRes = await postMultiExerciseArchiveToBackend(BACKEND_URL, multiSession);
+      if (!archiveRes.ok) {
+        console.warn('[export] visit archive failed:', archiveRes.error);
+      }
+
       if (backendErrors.length === 0) {
         Alert.alert(
-          'Session exported',
-          localRes.ok && localRes.writtenTo
-            ? `Backend upload succeeded.\nLocal files saved at:\n${localRes.writtenTo}`
-            : 'Uploaded successfully to backend.',
+          'Visit exported',
+          `${entries.length} exercises uploaded for this visit.${
+            localRes.ok && localRes.writtenTo ? `\n\nLocal files: ${localRes.writtenTo}` : ''
+          }`,
         );
       } else {
         const detail = backendErrors.join('\n');

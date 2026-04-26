@@ -41,7 +41,11 @@ class PatientSessionOverview(BaseModel):
     kind: Literal["exercise", "pt"]
     started_at: datetime
     ended_at: datetime | None
-    exercise: str | None
+    # Deprecated — kept temporarily for clients that still read a single
+    # exercise name. New clients should read ``exercises``.
+    exercise: str | None = None
+    exercises: list[str] = []
+    num_exercises: int = 0
     summary: str | None
     fall_risk_score: float | None
     reinjury_risk_score: float | None

@@ -94,13 +94,30 @@ class Summary(Base):
     session = relationship("Session", back_populates="summaries")
 
 
-class ExerciseSession(Base):
+class Exercise(Base):
+    """One mobile-app exercise upload (squat, SLS, etc.).
+
+    The DB table is still named ``exercise_sessions`` for backward
+    compatibility — renaming the table forces an Alembic rename touching
+    every migration and a stop-the-world deploy. The Python class is
+    renamed ahead of the table; ``mobile_session_id`` keeps its DB column
+    name but is exposed as ``mobile_exercise_id`` in Python.
+
+    ``visit_id`` (added in migration 0009) ties the N exercise rows from
+    one recording visit together — agents can read it directly, no JOIN
+    required. ``injured_joint_rom`` is a denormalised copy of the per-
+    exercise ROM number for the patient's injured joint on this visit;
+    the canonical source of truth lives in the MultiExerciseSession
+    archive payload.
+    """
+
     __tablename__ = "exercise_sessions"
 
     id = Column(String(36), primary_key=True, default=_uuid)
     patient_id = Column(String(36), ForeignKey("patients.id"), nullable=True)
-    # ISO timestamp string sent from the mobile app ("2026-04-25T10:57:06.124Z")
-    mobile_session_id = Column(String(64), nullable=False, unique=True)
+    # ISO timestamp string sent from the mobile app — synthetic per-exercise id
+    # (e.g. "2026-04-25T10:57:06.124Z-squat-3").
+    mobile_exercise_id = Column("mobile_session_id", String(64), nullable=False, unique=True)
     exercise = Column(String(64), nullable=False)
     num_reps = Column(Integer, nullable=False)
     started_at_ms = Column(Float, nullable=False)
@@ -119,16 +136,25 @@ class ExerciseSession(Base):
     # pose_analysis_agent can read them through the existing frames pipeline.
     linked_session_id = Column(String(36), ForeignKey("sessions.id"), nullable=True)
 
+    # Top-level MultiExerciseSession.sessionId from the mobile app — same value
+    # on every Exercise row produced by a single recording visit. Nullable for
+    # legacy rows from before migration 0009.
+    visit_id = Column(String(64), nullable=True, index=True)
+    # Per-exercise carve-out from MultiExerciseSession.patient.injuredJoint
+    # .romByExercise — shape: {"joint": "right_knee", "rom": 87.3} or
+    # {"joint": "right_knee", "rom": null}.
+    injured_joint_rom = Column(JSON, nullable=True)
+
     patient = relationship("Patient", foreign_keys=[patient_id])
     linked_session = relationship("Session", foreign_keys=[linked_session_id])
-    reps = relationship("RepAnalysis", back_populates="exercise_session", cascade="all, delete-orphan")
+    reps = relationship("RepAnalysis", back_populates="exercise", cascade="all, delete-orphan")
 
 
 class RepAnalysis(Base):
     __tablename__ = "rep_analyses"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    exercise_session_id = Column(String(36), ForeignKey("exercise_sessions.id"), nullable=False)
+    exercise_id = Column("exercise_session_id", String(36), ForeignKey("exercise_sessions.id"), nullable=False)
     rep_id = Column(Integer, nullable=False)
     side = Column(String(10), nullable=False)  # "left" | "right"
 
@@ -167,7 +193,28 @@ class RepAnalysis(Base):
     classification = Column(String(32), nullable=True)
     confidence = Column(Float, nullable=True)
 
-    exercise_session = relationship("ExerciseSession", back_populates="reps")
+    exercise = relationship("Exercise", back_populates="reps")
+
+
+class MultiExerciseSessionArchive(Base):
+    """Whole-visit archive — full MultiExerciseSession JSON from the mobile app.
+
+    TODO(longitudinal): this table is read by the future longitudinal
+    report agent. Do NOT query it from any current route or agent.
+    Write-only for now. One row per recording visit, idempotent on
+    ``visit_id``.
+    """
+
+    __tablename__ = "multi_exercise_sessions"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    visit_id = Column(String(64), nullable=False, unique=True, index=True)
+    patient_id = Column(String(36), ForeignKey("patients.id"), nullable=True)
+    started_at_ms = Column(Float, nullable=False)
+    ended_at_ms = Column(Float, nullable=False)
+    duration_ms = Column(Float, nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class AgentArtifact(Base):

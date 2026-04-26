@@ -38,9 +38,9 @@ os.environ.setdefault("CHROMA_PERSIST_DIR", "./chroma_db")
 os.environ.setdefault("DEV_MODE", "True")
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from db.models import Base, Patient, Session, PoseFrame, ExerciseSession, RepAnalysis
+from db.models import Base, Patient, Session, PoseFrame, Exercise, RepAnalysis
 from schemas.session import IntakeInput, IntakeOutput, PoseAnalysisOutput, FallRiskOutput, ReinjuryRiskOutput
-from schemas.exercise import ExerciseSessionResult
+from schemas.exercise import ExerciseResult
 
 LIVE = os.environ.get("OPENAI_API_KEY", "sk-mock") != "sk-mock"
 
@@ -211,11 +211,11 @@ async def run_all(engine, session_data: dict, label: str):
 
         await db.commit()
 
-        # Also persist as ExerciseSession + RepAnalysis (the new schema path)
-        ex_session = ExerciseSession(
+        # Also persist as Exercise + RepAnalysis (the new schema path)
+        ex_session = Exercise(
             id=str(uuid.uuid4()),
             patient_id=patient_id,
-            mobile_session_id=session_data["sessionId"],
+            mobile_exercise_id=session_data["sessionId"],
             exercise=session_data["exercise"],
             num_reps=session_data["numReps"],
             started_at_ms=session_data["startedAtMs"],
@@ -231,7 +231,7 @@ async def run_all(engine, session_data: dict, label: str):
             e = rep["errors"]
             db.add(RepAnalysis(
                 id=str(uuid.uuid4()),
-                exercise_session_id=ex_session.id,
+                exercise_id=ex_session.id,
                 rep_id=rep["repId"],
                 side=rep["side"],
                 start_frame=rep["timing"]["startFrame"],

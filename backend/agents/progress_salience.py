@@ -6,6 +6,10 @@ Two pure async functions:
   compute_salience()       — selects sessions and metrics worth reporting
 
 Neither function calls an LLM.
+
+Note: Exercise rows now carry ``visit_id`` linking the N exercises from
+one recording visit. The future longitudinal report agent will aggregate
+on visit_id; this agent still treats each linked Session row independently.
 """
 from __future__ import annotations
 
@@ -15,7 +19,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import AgentArtifact, ExerciseSession, Patient, Session, SessionScore, Summary
+from db.models import AgentArtifact, Exercise, Patient, Session, SessionScore, Summary
 
 
 @dataclass
@@ -103,10 +107,11 @@ async def build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTi
         if row.session_id:
             summary_by_session.setdefault(row.session_id, row.content)
 
-    # Exercise session IDs (to determine source_type)
+    # Exercise session IDs (to determine source_type).
+    # NOTE: visit_id is available on Exercise rows for future use.
     ex_result = await db.execute(
-        select(ExerciseSession.linked_session_id)
-        .where(ExerciseSession.linked_session_id.in_(session_ids))
+        select(Exercise.linked_session_id)
+        .where(Exercise.linked_session_id.in_(session_ids))
     )
     exercise_linked_ids = {row[0] for row in ex_result.all() if row[0]}
 

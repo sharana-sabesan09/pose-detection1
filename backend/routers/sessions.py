@@ -5,10 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from db.session import get_db
-from db.models import Session, PoseFrame, ExerciseSession, RepAnalysis, Patient
+from db.models import Session, PoseFrame, Exercise, MultiExerciseSessionArchive, RepAnalysis, Patient
 from schemas.session import IntakeInput, ReporterOutput
 from schemas.report import SessionStartRequest, SessionStartResponse, FrameRequest
-from schemas.exercise import ExerciseSessionResult, ExerciseSessionResponse
+from schemas.exercise import ExerciseResult, ExerciseResponse, MultiExerciseArchivePayload
 from schemas.voice import VoiceMetadataExtractRequest, VoiceMetadataExtractResponse
 from agents.orchestrator import run_session_pipeline, run_exercise_pipeline
 from routers.auth import require_jwt
@@ -108,14 +108,14 @@ async def extract_voice_metadata(
     )
 
 
-@router.post("/exercise-result", response_model=ExerciseSessionResponse, status_code=201)
+@router.post("/exercise-result", response_model=ExerciseResponse, status_code=201)
 async def store_exercise_result(
-    body: ExerciseSessionResult,
+    body: ExerciseResult,
     db: AsyncSession = Depends(get_db),
     _user=Depends(require_jwt),
 ):
     existing = await db.execute(
-        select(ExerciseSession).where(ExerciseSession.mobile_session_id == body.sessionId)
+        select(Exercise).where(Exercise.mobile_exercise_id == body.sessionId)
     )
     if existing.scalars().first():
         raise HTTPException(status_code=409, detail="Session already stored")
@@ -134,10 +134,17 @@ async def store_exercise_result(
     db.add(linked_session)
     await db.flush()
 
-    exercise_session = ExerciseSession(
+    # Older mobile builds may not send visitId yet. Fall back to sessionId so
+    # legacy uploads still get a non-null value (each row becomes its own
+    # one-row visit, matching today's behaviour) while new uploads share a
+    # real visit_id across the visit.
+    visit_id = body.visitId or body.sessionId
+    injured_joint_rom = body.injuredJointRom.model_dump() if body.injuredJointRom else None
+
+    exercise_row = Exercise(
         id=str(uuid.uuid4()),
         patient_id=body.patientId,
-        mobile_session_id=body.sessionId,
+        mobile_exercise_id=body.sessionId,
         exercise=body.exercise,
         num_reps=body.numReps,
         started_at_ms=body.startedAtMs,
@@ -149,14 +156,16 @@ async def store_exercise_result(
         frame_features_csv=body.frameFeaturesCsv,
         frames_csv=body.framesCsv,
         linked_session_id=linked_session.id,
+        visit_id=visit_id,
+        injured_joint_rom=injured_joint_rom,
     )
-    db.add(exercise_session)
+    db.add(exercise_row)
     await db.flush()
 
     for rep in body.summary.reps:
         db.add(RepAnalysis(
             id=str(uuid.uuid4()),
-            exercise_session_id=exercise_session.id,
+            exercise_id=exercise_row.id,
             rep_id=rep.repId,
             side=rep.side,
             start_frame=rep.timing.startFrame,
@@ -209,6 +218,7 @@ async def store_exercise_result(
             ))
 
     linked_session_id = linked_session.id  # capture before commit expires the ORM object
+    exercise_id = exercise_row.id
     await db.commit()
 
     # Fire the exercise pipeline as a background task — returns 201 immediately,
@@ -217,14 +227,49 @@ async def store_exercise_result(
         run_exercise_pipeline(body, linked_session_id, body.patientId)
     )
 
-    return ExerciseSessionResponse(
-        id=exercise_session.id,
-        sessionId=exercise_session.mobile_session_id,
-        exercise=exercise_session.exercise,
-        numReps=exercise_session.num_reps,
+    return ExerciseResponse(
+        id=exercise_id,
+        sessionId=body.sessionId,
+        visitId=visit_id,
+        exercise=body.exercise,
+        numReps=body.numReps,
         overallRating=body.summary.summary.overallRating,
         linkedSessionId=linked_session_id,
     )
+
+
+@router.post("/multi-exercise-archive", status_code=201)
+async def store_multi_exercise_archive(
+    body: MultiExerciseArchivePayload,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_jwt),
+):
+    """Archive the full MultiExerciseSession JSON for one recording visit.
+
+    TODO(longitudinal): a future longitudinal report agent will read this
+    table. No current route or agent reads it. Idempotent on visit_id —
+    a repeat POST returns ``{"status": "exists"}`` instead of 409.
+    """
+    existing = await db.execute(
+        select(MultiExerciseSessionArchive).where(
+            MultiExerciseSessionArchive.visit_id == body.visitId
+        )
+    )
+    if existing.scalars().first():
+        return {"status": "exists", "visitId": body.visitId}
+
+    await _ensure_patient_exists(body.patientId, db)
+    db.add(MultiExerciseSessionArchive(
+        id=str(uuid.uuid4()),
+        visit_id=body.visitId,
+        patient_id=body.patientId,
+        started_at_ms=body.startedAtMs,
+        ended_at_ms=body.endedAtMs,
+        duration_ms=body.durationMs,
+        payload_json=body.payload,
+    ))
+    await db.commit()
+    return {"status": "stored", "visitId": body.visitId}
 
 
 def _build_landmarks_csv_from_frames(frames: list[PoseFrame], mode: str) -> str:
@@ -253,18 +298,18 @@ async def latest_landmark_frames_csv(
     _user=Depends(require_jwt),
 ):
     result = await db.execute(
-        select(ExerciseSession)
-        .where(ExerciseSession.exercise == exercise)
-        .order_by(ExerciseSession.created_at.desc())
+        select(Exercise)
+        .where(Exercise.exercise == exercise)
+        .order_by(Exercise.created_at.desc())
         .limit(1)
     )
-    ex = result.scalars().first()
-    if not ex or not ex.linked_session_id:
+    exercise_row = result.scalars().first()
+    if not exercise_row or not exercise_row.linked_session_id:
         raise HTTPException(status_code=404, detail="no stored session with linked frames")
 
     frames_result = await db.execute(
         select(PoseFrame)
-        .where(PoseFrame.session_id == ex.linked_session_id)
+        .where(PoseFrame.session_id == exercise_row.linked_session_id)
         .where(PoseFrame.landmarks_json.isnot(None))
         .order_by(PoseFrame.timestamp)
     )

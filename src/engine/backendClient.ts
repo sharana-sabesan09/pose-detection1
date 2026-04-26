@@ -33,7 +33,10 @@ export interface PatientOverview {
     kind: 'exercise' | 'pt';
     started_at: string;
     ended_at: string | null;
+    /** Deprecated — backend still emits this for older clients. Read `exercises` instead. */
     exercise: string | null;
+    exercises: string[];
+    num_exercises: number;
     summary: string | null;
     fall_risk_score: number | null;
     reinjury_risk_score: number | null;

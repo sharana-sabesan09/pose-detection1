@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 from config import settings
 from db.session import get_db
-from db.models import ExerciseSession, PoseFrame
+from db.models import Exercise, PoseFrame
 from utils.frame_csv import parse_frame_features_csv
 
 
@@ -87,20 +87,20 @@ async def export_session(
         written.append(str(p))
 
         # Also ingest frames into the DB so pose_analysis_agent can read them.
-        # Look up the ExerciseSession by mobile_session_id to find the linked
+        # Look up the Exercise row by mobile_exercise_id to find the linked
         # Session UUID that PoseFrame rows must reference.
         result = await db.execute(
-            select(ExerciseSession).where(
-                ExerciseSession.mobile_session_id == body.session_id
+            select(Exercise).where(
+                Exercise.mobile_exercise_id == body.session_id
             )
         )
-        ex = result.scalars().first()
-        if ex and ex.linked_session_id:
+        exercise_row = result.scalars().first()
+        if exercise_row and exercise_row.linked_session_id:
             frame_rows = parse_frame_features_csv(body.frames_csv)
             for fr in frame_rows:
                 db.add(PoseFrame(
                     id=str(uuid.uuid4()),
-                    session_id=ex.linked_session_id,
+                    session_id=exercise_row.linked_session_id,
                     timestamp=fr["timestamp"],
                     angles_json=fr["angles_json"],
                 ))
