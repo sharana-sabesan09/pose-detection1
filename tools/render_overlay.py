@@ -25,7 +25,7 @@ HEIGHT = 1280
 BG = (18, 18, 18)
 MIN_VIS = 0.2
 
-LIVE_COLOR = (255, 212, 0)  # cyan-ish in BGR
+LIVE_COLOR = (0, 0, 255)  # red (BGR)
 GHOST_COLOR = (60, 220, 60)  # green
 
 
