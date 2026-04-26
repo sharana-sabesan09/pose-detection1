@@ -166,15 +166,31 @@ export const POSE_HTML = `
     let ghostLayoutStage = 'corner';
     let ghostIntroStartedMs = 0;
     let ghostTransitionStartMs = 0;
+    /** Locked zoom per panel size so bbox jitter doesn’t “breathe” the silhouette each frame. */
+    let ghostScaleLocked = 0;
+    let ghostScaleLockPanelW = -1;
+    let ghostScaleLockPanelH = -1;
+    let ghostTransitionS0 = 0;
+    let ghostTransitionS1 = 0;
+
+    function resetGhostScaleLocks() {
+      ghostScaleLocked = 0;
+      ghostScaleLockPanelW = -1;
+      ghostScaleLockPanelH = -1;
+      ghostTransitionS0 = 0;
+      ghostTransitionS1 = 0;
+    }
 
     window.__setGhostExercise = (ex) => {
       ghostExercise = ex || 'walking';
       ghostPhase = 0;
+      resetGhostScaleLocks();
     };
 
     window.__ghostStartRecordingLayout = function () {
       ghostLayoutStage = 'fullscreen';
       ghostIntroStartedMs = performance.now();
+      resetGhostScaleLocks();
     };
 
     function alignGhostLm(lm, vw, vh, scale, ox, oy, W, H) {
@@ -287,7 +303,7 @@ export const POSE_HTML = `
 
     function drawGhostInTrainerPanel(
       frame, vw, vh, sc, ox, oy, W, H, baseLimbHalf, jointRBase,
-      panelX, panelY, panelW, panelH, innerPad,
+      panelX, panelY, panelW, panelH, innerPad, forcedScale,
     ) {
       const bb = ghostBBoxScreenPx(frame, vw, vh, sc, ox, oy, W, H);
       if (!bb) return;
@@ -296,7 +312,19 @@ export const POSE_HTML = `
       const bw = Math.max(bb.maxX - bb.minX, 48);
       const bh = Math.max(bb.maxY - bb.minY, 72);
       const pad = innerPad;
-      const s = Math.min((panelW - 2 * pad) / bw, (panelH - 2 * pad) / bh);
+      const sTarget = Math.min((panelW - 2 * pad) / bw, (panelH - 2 * pad) / bh) * 0.96;
+      let s;
+      if (forcedScale != null && forcedScale > 0) {
+        s = forcedScale;
+      } else {
+        if (ghostScaleLockPanelW !== panelW || ghostScaleLockPanelH !== panelH) {
+          ghostScaleLocked = 0;
+          ghostScaleLockPanelW = panelW;
+          ghostScaleLockPanelH = panelH;
+        }
+        if (ghostScaleLocked <= 0) ghostScaleLocked = sTarget;
+        s = ghostScaleLocked;
+      }
       ctx.save();
       ctx.fillStyle = GHOST_PANEL_BG;
       ctx.fillRect(Math.floor(panelX), Math.floor(panelY), Math.ceil(panelW), Math.ceil(panelH));
@@ -369,23 +397,36 @@ export const POSE_HTML = `
       const t = ph - Math.floor(ph);
       const frame = lerpLandmarks(cycle[i0], cycle[i1], t);
 
-      if (ghostLayoutStage === 'fullscreen' && ghostIntroStartedMs > 0 &&
-          now - ghostIntroStartedMs >= GHOST_INTRO_FULLSCREEN_MS) {
-        ghostLayoutStage = 'transition';
-        ghostTransitionStartMs = now;
-      }
-
       const baseLimbHalf = Math.max(9, Math.min(W, H) * 0.0155);
       const jointRBase = baseLimbHalf * 1.12;
       const rects = ghostPanelRects(W, H);
       const padFull = 40;
       const padCorner = 12;
 
+      if (ghostLayoutStage === 'fullscreen' && ghostIntroStartedMs > 0 &&
+          now - ghostIntroStartedMs >= GHOST_INTRO_FULLSCREEN_MS) {
+        const Bpre = rects.corner;
+        const bbT = ghostBBoxScreenPx(frame, vw, vh, scale, offsetX, offsetY, W, H);
+        if (bbT) {
+          const bwT = Math.max(bbT.maxX - bbT.minX, 48);
+          const bhT = Math.max(bbT.maxY - bbT.minY, 72);
+          ghostTransitionS1 =
+            Math.min((Bpre.w - 2 * padCorner) / bwT, (Bpre.h - 2 * padCorner) / bhT) * 0.96;
+        } else {
+          ghostTransitionS1 =
+            ghostScaleLocked > 0 ? ghostScaleLocked * (Bpre.w / W) * 0.92 : 0.08;
+        }
+        ghostTransitionS0 = ghostScaleLocked > 0 ? ghostScaleLocked : ghostTransitionS1;
+        if (ghostTransitionS0 <= 0) ghostTransitionS0 = ghostTransitionS1;
+        ghostLayoutStage = 'transition';
+        ghostTransitionStartMs = now;
+      }
+
       if (ghostLayoutStage === 'fullscreen') {
         const r = rects.fullscreen;
         drawGhostInTrainerPanel(
           frame, vw, vh, scale, offsetX, offsetY, W, H, baseLimbHalf, jointRBase,
-          r.x, r.y, r.w, r.h, padFull,
+          r.x, r.y, r.w, r.h, padFull, null,
         );
       } else if (ghostLayoutStage === 'transition') {
         const elapsed = now - ghostTransitionStartMs;
@@ -393,6 +434,9 @@ export const POSE_HTML = `
         if (elapsed >= GHOST_LAYOUT_TRANSITION_MS || u >= 1) {
           ghostLayoutStage = 'corner';
           u = 1;
+          ghostScaleLocked = ghostTransitionS1;
+          ghostScaleLockPanelW = rects.corner.w;
+          ghostScaleLockPanelH = rects.corner.h;
         }
         const A = rects.fullscreen;
         const B = rects.corner;
@@ -401,15 +445,16 @@ export const POSE_HTML = `
         const rw = A.w + (B.w - A.w) * u;
         const rh = A.h + (B.h - A.h) * u;
         const innerPad = padFull + (padCorner - padFull) * u;
+        const sLerp = ghostTransitionS0 + (ghostTransitionS1 - ghostTransitionS0) * u;
         drawGhostInTrainerPanel(
           frame, vw, vh, scale, offsetX, offsetY, W, H, baseLimbHalf, jointRBase,
-          rx, ry, rw, rh, innerPad,
+          rx, ry, rw, rh, innerPad, sLerp,
         );
       } else if (ghostLayoutStage === 'corner') {
         const r = rects.corner;
         drawGhostInTrainerPanel(
           frame, vw, vh, scale, offsetX, offsetY, W, H, baseLimbHalf, jointRBase,
-          r.x, r.y, r.w, r.h, padCorner,
+          r.x, r.y, r.w, r.h, padCorner, null,
         );
       }
     }
