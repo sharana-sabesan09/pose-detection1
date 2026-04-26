@@ -42,12 +42,13 @@ backend/
 │
 ├── routers/
 │   ├── auth.py              JWT issue + require_jwt dependency
-│   ├── patients.py          Patient metadata upsert + patient overview read model
+│   ├── patients.py          Patient metadata, patient overview, and advice query endpoint
 │   ├── sessions.py          Session lifecycle + exercise result ingestion
 │   ├── reports.py           Latest report + progress report per patient
 │   └── exports.py           Dev-only: dump session artifacts to local disk
 │
 ├── schemas/
+│   ├── advice.py            Patient advice request / response models
 │   ├── patient.py           Patient metadata + patient overview response models
 │   ├── session.py           Pydantic models for the PT agent pipeline I/O
 │   ├── report.py            SessionStart, FrameRequest, Token models
@@ -158,6 +159,7 @@ Token lifetime: 24 hours. Algorithm: HS256. Secret: `JWT_SECRET` env var.
 | PUT | `/patients/{patient_id}` | JWT | Upsert the patient metadata record from the mobile intake flow |
 | GET | `/patients/{patient_id}` | JWT | Fetch the patient metadata record |
 | GET | `/patients/{patient_id}/overview` | JWT | Fetch patient metadata, accumulated scores, session count, and the recent session timeline |
+| POST | `/patients/{patient_id}/advice` | JWT | Ask the patient-advisor agent a patient-specific guidance question. The answer is grounded in patient metadata, recent session summaries, recent scores, and accumulated score history. |
 
 ### Reports
 
@@ -227,7 +229,12 @@ The `physio-orchestrator` uAgent holds a Fetch.ai mailbox key and is registered 
 
 `run_agent.py` starts both:
 - FastAPI on port 8000 (daemon thread)
-- The Fetch.ai `Bureau` (blocking main thread) which runs all 7 uAgents together
+- The Fetch.ai `Bureau` (blocking main thread) which runs all 8 uAgents together
+
+The active Bureau now includes `patient_advisor_agent`, which can answer
+patient-facing symptom or "what should I do?" questions using stored patient
+context. It is intentionally conservative: it does not diagnose, it surfaces
+urgent escalation flags, and it writes an audit trail like the other agents.
 
 ### HIPAA middleware
 

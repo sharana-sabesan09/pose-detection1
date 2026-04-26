@@ -24,6 +24,7 @@ Both sessions produced `overallRating: "poor"`. All reps across both sessions we
 | Production upload path lacked JWT auth | **Fixed** | React Native app now calls `POST /auth/token` before `POST /sessions/exercise-result` |
 | Anonymous exercise uploads could not create linked sessions | **Fixed** | `sessions.patient_id` is now nullable, matching the exercise schema's optional `patientId` |
 | Mobile users had no stable backend patient identity or patient-centric read model | **Fixed** | Intake now upserts `/patients/{patientId}`, session uploads reuse that ID, and the Results tab reads `/patients/{patientId}/overview` plus report endpoints |
+| No patient-facing question-answering agent could use stored patient context | **Fixed** | `patient_advisor_agent` now answers `POST /patients/{patient_id}/advice` using patient metadata, recent session summaries, recent scores, and accumulated score history |
 | `pose_analysis_agent` duplicates mobile work | **Deferred** | Still used for PT frame sessions; only exercise path bypasses it |
 | Agentverse path undocumented entry point | **Deferred** | HTTP pipeline is the active path; Agentverse remains optional |
 

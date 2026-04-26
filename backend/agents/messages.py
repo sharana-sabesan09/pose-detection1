@@ -89,3 +89,20 @@ class ProgressResponse(Model):
     milestones_reached: list
     next_goals: list
     error: Optional[str] = None
+
+
+class PatientAdviceRequestMessage(Model):
+    request_id: str
+    patient_id: str
+    question: str
+
+
+class PatientAdviceResponseMessage(Model):
+    request_id: str
+    patient_id: str
+    answer: str
+    safety_level: str
+    urgent_flags: list[str]
+    next_steps: list[str]
+    disclaimer: str
+    error: Optional[str] = None

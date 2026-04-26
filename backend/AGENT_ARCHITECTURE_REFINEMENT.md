@@ -4,127 +4,106 @@ Date: 2026-04-25
 
 ## Goal
 
-Keep the current multi-agent shape for now, but make it clinically grounded,
-traceable, and compatible with a future full Agentverse rollout.
+Make the existing agent pipeline clinically grounded and traceable without
+changing the overall agent shape. Every agent produces a durable, machine-readable
+artifact. Downstream agents consume those artifacts instead of re-deriving context
+from prose. The progress layer gets structured evidence, not just summaries.
 
-This document does **not** remove redundant agents yet. It instead changes the
-contracts between them so they pass forward verifiable facts, not just prose.
+**Scope**: PT session pipeline only (`intake → pose → fall_risk + reinjury_risk →
+reporter → progress`). The exercise pipeline (`exercise_reporter`) is out of scope
+and will be addressed separately with a local Med Gemma model.
 
 ---
 
 ## What Is Wrong Right Now
 
-### 1. `progress_agent` sees too little structured evidence
+### 1. `progress_agent` summarises prose without structured evidence
 
-Current input:
-- all prior `Summary(agent_name="reporter")` rows
-- `AccumulatedScore.fall_risk_avg`
-- `AccumulatedScore.reinjury_risk_avg`
+Current inputs:
+- All `Summary(agent_name="reporter")` rows — plain text
+- `AccumulatedScore.fall_risk_avg` and `reinjury_risk_avg` — two floats
 
-Current problem:
-- it performs a summary-of-summaries pass on prose only
-- it cannot inspect the exact metrics that caused earlier conclusions
-- it cannot tell whether a prior summary was based on strong data or thin data
-- it cannot explain *which session* caused a milestone or regression
-- it writes `Summary(agent_name="progress", session_id=None)`, so the report is
-  not linked to a concrete evidence bundle
-
-This is the core traceability problem. The issue is **not** that it summarizes
-prior summaries. The issue is that it summarizes prior summaries **without the
-supporting structured evidence that produced them**.
+Problems:
+- Cannot inspect the metrics that drove earlier conclusions
+- Cannot distinguish a session with strong data from one with thin data
+- Cannot identify which session triggered a milestone or regression
+- `Summary(session_id=None)` — the progress report is not linked to any evidence bundle
 
 ### 2. Agent outputs lose provenance as they move downstream
 
-Right now most agents emit:
-- one structured output object in memory
-- one narrative row in `summaries`
-- a few numeric columns in `session_scores`
+Every agent currently emits:
+- One structured output object in memory
+- One prose row in `summaries`
+- A few numeric columns in `session_scores`
 
 What is missing:
-- upstream source references
-- evidence IDs
-- metric coverage / quality indicators
-- confidence / data sufficiency flags
-- a durable machine-readable artifact for later reuse
+- Upstream source references
+- Distinction between directly measured facts and LLM-inferred interpretations
+- Data-sufficiency flags
+- A durable machine-readable artifact reusable by later agents
 
-That means downstream agents cannot distinguish:
-- directly observed facts
-- deterministic derived metrics
-- LLM-written interpretations
+### 3. `reinjury_risk_agent` has insufficient historical inputs
 
-### 3. `fall_risk_agent` and `reinjury_risk_agent` are under-specified
+The agent queries `SessionScore` for the last 5 sessions — one aggregate float
+per session. This cannot answer:
+- Which specific joint is deteriorating
+- Whether the same movement error is recurring
+- Whether the trend is data-sufficient (how many sessions actually had measurements)
 
-They are not wrong because they use an LLM. They are wrong because they are
-asked to make broad clinical judgments from narrow inputs.
+### 4. RAG failures are silent
 
-Current PT-path inputs are too lossy:
-- `fall_risk_agent`: pain, target joints, ROM score, flagged joints, joint stats
-- `reinjury_risk_agent`: recent fall/ROM score lists plus current flagged joints
+If Chroma returns nothing, the agent continues without acknowledgement. The
+resulting report looks identical whether or not guidelines were used.
 
-These inputs are not rich enough for grounded clinical reasoning.
+### 5. No canonical evidence packet
 
-### 4. RAG is not yet an anchor
-
-If Chroma is empty or ephemeral, "guideline-grounded" reasoning silently
-degrades to pure LLM reasoning. That is acceptable as a fallback, but it should
-be explicit in artifacts and UI, not hidden.
-
-### 5. The system has no canonical evidence packet
-
-There is no single schema saying:
-- what a session fact is
-- what an agent is allowed to claim
-- which claims are directly measured vs inferred
-- which upstream artifacts support each claim
-
-Without that, every downstream prompt is forced to reconstruct context.
+There is no shared schema that says what an agent is allowed to claim, which
+claims are directly measured vs inferred, or which upstream artifacts support
+each claim.
 
 ---
 
 ## Design Principles
 
-1. Summary-of-summaries is allowed.
-   The progress layer may summarize prior reporter summaries.
+1. **Agents write their own artifacts.** Each agent is responsible for persisting
+   its output to `agent_artifacts` before returning. The orchestrator does not
+   write artifacts on an agent's behalf.
 
-2. Summary-of-summaries is not enough.
-   Every summary must travel with the structured evidence that justified it.
+2. **Artifacts travel through the pipeline.** Downstream agents consume prior
+   artifacts rather than raw DB queries where artifacts are available.
 
-3. LLMs should narrate, rank, and explain.
-   Deterministic code should compute scores, deltas, thresholds, and salience.
+3. **LLMs narrate. Deterministic code scores and selects.** All thresholds,
+   deltas, and trend directions are computed before the LLM call.
 
-4. Every report must be reproducible.
-   For any sentence in a progress report, you should be able to answer:
-   - which sessions support it
-   - which metrics support it
-   - which agent created the supporting claim
+4. **Every claim is traceable.** For any sentence in a progress report you should
+   be able to identify which sessions and metrics support it.
 
-5. Agentverse should be an orchestration layer, not a substitute datastore.
-   Messages move work. Postgres stores truth.
+5. **Missing data is explicit.** If required inputs are absent the artifact
+   records what is missing. Confidence degrades visibly rather than silently.
+
+6. **Session goals stay LLM-based.** `session_goals` is a `list[str]` produced
+   by intake and used by reporter for context. No structured goal-completion logic
+   is added — milestone detection in the progress layer remains LLM-determined.
 
 ---
 
-## Proposed Architecture
+## Canonical `AgentEvidencePacket`
 
-## A. Introduce a canonical `AgentEvidencePacket`
-
-Every agent should output a durable JSON artifact with the same top-level shape.
-
-Recommended fields:
+Every agent persists one artifact per run with this top-level shape:
 
 ```json
 {
   "artifact_id": "uuid",
-  "session_id": "uuid",
+  "session_id": "uuid | null",
   "patient_id": "uuid",
   "agent_name": "fall_risk_agent",
   "artifact_version": "1.0",
   "created_at": "2026-04-25T12:00:00Z",
-  "source_type": "pt_session|exercise_session|progress_rollup",
+  "source_type": "pt_session | progress_rollup",
   "upstream_artifact_ids": ["uuid1", "uuid2"],
   "data_coverage": {
     "required_fields_present": true,
     "missing_fields": [],
-    "signal_quality": "high|medium|low",
     "notes": []
   },
   "metrics": {},
@@ -136,361 +115,559 @@ Recommended fields:
   },
   "provenance": {
     "session_ids_used": ["uuid"],
-    "raw_sources": ["pose_frames", "session_scores", "exercise_sessions"],
-    "rag_used": true,
+    "raw_sources": ["pose_frames", "session_scores", "rep_analyses"],
+    "rag_used": false,
     "rag_query": "",
     "rag_sources": []
   }
 }
 ```
 
-This packet is what downstream agents consume.
+`metrics` content is agent-specific and defined in the per-agent contracts below.
 
-## B. Store artifacts separately from narrative summaries
+---
 
-Keep `summaries` for human-readable text, but add a dedicated artifact store.
+## New DB Table: `agent_artifacts`
 
-Recommended new table:
-- `agent_artifacts`
+```sql
+CREATE TABLE agent_artifacts (
+    id                         VARCHAR(36) PRIMARY KEY,
+    session_id                 VARCHAR(36) REFERENCES sessions(id)  NULL,
+    patient_id                 VARCHAR(36) REFERENCES patients(id)  NULL,
+    agent_name                 VARCHAR(64) NOT NULL,
+    artifact_kind              VARCHAR(64) NOT NULL,
+    artifact_json              JSON        NOT NULL,
+    created_at                 DATETIME    NOT NULL,
+    upstream_artifact_ids_json JSON        NOT NULL DEFAULT '[]',
+    data_coverage_json         JSON        NOT NULL DEFAULT '{}'
+);
+```
 
-Suggested columns:
-- `id`
-- `session_id`
-- `patient_id`
-- `agent_name`
-- `artifact_kind`
-- `artifact_json`
-- `created_at`
-- `upstream_artifact_ids_json`
-- `data_quality_json`
+Indexes required:
+- `(session_id, agent_name)` — fetch an agent's artifact for a given session
+- `(patient_id, agent_name, created_at)` — longitudinal history per agent per patient
 
-Why:
-- `Summary.content` should not be the only durable output
-- downstream agents need machine-readable evidence
-- audit/replay/debug becomes possible
+---
 
-## C. Redesign `progress_agent` as "salience over summaries + evidence"
+## Shared Utility: `utils/artifacts.py`
 
-Do **not** remove the summary-of-summaries behavior.
+New module. Single public function:
 
-Instead, make it operate in four layers:
+```python
+async def write_artifact(
+    agent_name: str,
+    session_id: str | None,
+    patient_id: str,
+    artifact_kind: str,
+    artifact_json: dict,
+    upstream_artifact_ids: list[str],
+    data_coverage: dict,
+    db: AsyncSession,
+) -> str:  # returns artifact_id
+```
 
-### Layer 1: deterministic longitudinal fact builder
+**Idempotency rule**: before inserting, check for an existing row with the same
+`(session_id, agent_name)`. If found, return its `id` without inserting a
+duplicate. This protects against pipeline retries.
 
-Build a patient timeline from:
-- per-session `SessionScore`
-- per-session agent artifacts
-- prior reporter summaries
-- patient goals / target joints / restrictions
-- exercise metrics when available
+---
 
-This stage computes:
-- metric deltas over time
-- milestone candidates
-- regression candidates
-- missing-data warnings
-- confidence / coverage tags
-
-### Layer 2: deterministic salience selector
-
-Before any LLM call, pick the small set of changes that matter most.
-
-Example salience rules:
-- clinically meaningful score delta above threshold
-- sustained trend over 3+ sessions
-- repeated error pattern across sessions
-- goal achieved or missed
-- deterioration accompanied by worse pain / worse balance / lower ROM
-
-Output:
-- `salient_session_ids`
-- `salient_metrics`
-- `salient_prior_summaries`
-- `why_selected`
-
-### Layer 3: constrained LLM report writer
-
-Only after the fact builder and salience selector run should the LLM write:
-- longitudinal report
-- overall trend
-- milestones reached
-- next goals
-
-Prompt policy:
-- cite only selected evidence
-- do not infer unsupported causes
-- explicitly mention data gaps
-- emit structured evidence references per section
-
-### Layer 4: traceable progress artifact
-
-Persist:
-- chosen sessions
-- chosen metrics
-- chosen prior summaries
-- generated report
-- evidence references used for each report section
-
-This preserves the intended summary-of-summaries design while preventing blind
-re-summarization.
-
-## D. Change what agents pass downstream
+## Per-Agent Data Contracts
 
 ### `intake_agent`
 
-Should pass:
-- normalized pain
-- target joints
-- session goals
-- injury side
-- rehab phase
-- restrictions / contraindications
-- confidence that fields were explicit vs inferred
+**Inputs (from `POST /sessions/{id}/end` HTTP body)**
+- `pt_plan: str` — free-text clinical plan
+- `pain_scores: dict` — `{"joint_name": 0–10}` from the mobile app
+- `user_input: str` — patient's subjective report
+
+**Also reads from DB**
+- `Patient.metadata_json` — demographics plus, once the front-end provides them,
+  clinical fields: `injured_joints`, `injured_side`, `rehab_phase`,
+  `diagnosis`, `contraindications` (see `FRONTEND_DATA_REQUIREMENTS.md`)
+
+**Output (new fields added to `IntakeOutput`)**
+
+| Field | Source | Notes |
+|---|---|---|
+| `normalized_pain_scores` | LLM from `pain_scores` + `pt_plan` | already exists |
+| `target_joints` | LLM from `pt_plan` | already exists |
+| `session_goals` | LLM from `pt_plan` + `user_input` | already exists |
+| `injured_joints` | `metadata_json` if present, else `[]` | new |
+| `injured_side` | `metadata_json` if present, else `"unknown"` | new |
+| `rehab_phase` | `metadata_json` if present, else `"unknown"` | new |
+| `contraindications` | `metadata_json` if present, else `[]` | new |
+| `data_confidence` | `"explicit"` / `"inferred"` / `"missing"` | new |
+
+`data_confidence` is `"explicit"` when clinical fields came from `metadata_json`,
+`"inferred"` when guessed from `pt_plan` text by the LLM, `"missing"` when no
+source was available.
+
+**Artifact `metrics` block**
+```json
+{
+  "pain_scores": {"left_knee": 4, "right_hip": 2},
+  "target_joint_count": 2,
+  "injured_joints": ["left_knee"],
+  "injured_side": "left",
+  "rehab_phase": "sub-acute",
+  "contraindications": ["deep squat"],
+  "data_confidence": "explicit"
+}
+```
+
+---
 
 ### `pose_analysis_agent`
 
-Should pass:
-- joint-level stats
-- task label
-- sensor / frame quality
-- signal coverage
-- direct metric values
-- threshold breaches
+**Inputs (reads from DB)**
+- `PoseFrame` rows for the session, ordered by timestamp
+
+**Output (new fields added to `PoseAnalysisOutput`)**
+
+| Field | Notes |
+|---|---|
+| `rom_score` | already exists |
+| `joint_stats` | already exists — `{joint: {mean, min, max, std, rom}}` |
+| `flagged_joints` | already exists |
+| `frame_count` | new — total frames analysed |
+| `joint_coverage` | new — `{joint: frame_count}` for each joint seen |
+
+**Artifact `metrics` block**
+```json
+{
+  "rom_score": 64.5,
+  "frame_count": 240,
+  "joint_coverage": {"knee_flexion": 240, "hip_flexion": 230},
+  "joint_stats": {
+    "knee_flexion": {"mean": 45.2, "min": 12.0, "max": 95.0, "std": 18.3, "rom": 83.0}
+  },
+  "flagged_joints": ["knee_flexion"]
+}
+```
+
+---
 
 ### `fall_risk_agent`
 
-Should pass:
-- deterministic score inputs
-- risk factors actually present
-- evidence packet IDs it used
-- narrative explanation constrained to those inputs
+**Inputs (passed from orchestrator)**
+- `intake: dict` — `IntakeOutput` (with new fields from Phase 4)
+- `pose: dict` — `PoseAnalysisOutput`
+- RAG — Chroma clinical guidelines
+
+**Output (new fields added to `FallRiskOutput`)**
+
+| Field | Notes |
+|---|---|
+| `score` | already exists |
+| `risk_level` | already exists |
+| `reasoning` | already exists |
+| `contributing_factors` | already exists |
+| `rag_used` | new — `bool` |
+| `rag_sources` | new — `list[str]` document titles / chunk IDs |
+
+**RAG gating rule**
+- If Chroma returns 0 chunks: `rag_used=false`; remove guideline language from
+  the LLM prompt; add `"no guideline context retrieved"` to `data_coverage.notes`
+- If chunks returned: `rag_used=true`, populate `rag_query` and `rag_sources`
+
+**Artifact `metrics` block**
+```json
+{
+  "score": 42.0,
+  "risk_level": "medium",
+  "contributing_factors": ["knee_flexion ROM below 40% of expected", "pain 7/10"],
+  "rag_used": true,
+  "rag_sources": ["STEADI_fall_risk_2024.pdf chunk 3"]
+}
+```
+
+`upstream_artifact_ids`: intake artifact ID + pose artifact ID for this session.
+
+---
 
 ### `reinjury_risk_agent`
 
-Should pass:
-- session history window used
-- trend metrics used
-- current-session abnormalities used
-- whether the trend is data-sufficient
+**Current problem**
+
+The agent queries `SessionScore` (one aggregate float per session). It cannot
+say which joint is driving a trend or whether the trend is data-sufficient.
+
+**New inputs — all queried from DB by the agent itself**
+
+1. **Prior pose artifacts** (`agent_artifacts` table)
+   Query: `agent_name="pose_analysis_agent"`, `patient_id=patient_id`, last 5 by
+   `created_at`. Extract per-joint `rom` values for the patient's `injured_joints`.
+
+   `injured_joints` source priority:
+   - `Patient.metadata_json.injured_joints` if present
+   - Else: union of `flagged_joints` across the last 3 pose artifacts
+
+2. **`RepAnalysis` rows for exercise sessions**
+   If the patient has recent exercise sessions, query `RepAnalysis` for the
+   biomechanical features relevant to the injured joint using a static lookup:
+
+   | Injured joint keyword | RepAnalysis columns to read |
+   |---|---|
+   | `knee` | `knee_flexion_deg`, `fppa_peak`, `rom_ratio`, `knee_valgus` |
+   | `hip` | `hip_adduction_peak`, `pelvic_drop_peak`, `hip_adduction` |
+   | `ankle` | use ROM from pose artifacts (no dedicated RepAnalysis column) |
+   | `shoulder` | use ROM from pose artifacts |
+
+   Match is case-insensitive substring of the joint name (e.g. `"left_knee"` →
+   matches `"knee"` row in table above).
+
+3. **`SessionScore` rows** — last 5, aggregate trend (unchanged from current)
+
+**Output (new fields added to `ReinjuryRiskOutput`)**
+
+| Field | Notes |
+|---|---|
+| `score` | already exists |
+| `trend` | already exists — aggregate direction |
+| `reasoning` | already exists |
+| `sessions_used` | new — how many prior sessions had joint ROM data |
+| `data_sufficient` | new — `true` if `sessions_used >= 3` |
+| `injured_joint_trend` | new — per-joint direction and supporting values |
+
+**`injured_joint_trend` structure**
+```json
+{
+  "left_knee_flexion": {
+    "direction": "worsening",
+    "rom_values": [83, 79, 71, 65],
+    "delta_vs_earliest": -18,
+    "range_pct_delta": 0.28
+  }
+}
+```
+
+**Threshold for "worsening" / "improving"**
+
+Uses relative thresholds based on the patient's own score history:
+
+1. Compute `score_range = max(rom_values) - min(rom_values)` across all available
+   sessions for that joint.
+2. A session-over-session delta is salient if `abs(delta) >= 0.20 * score_range`.
+3. A direction requires ≥ 3 consecutive sessions with consistent delta sign.
+4. If `sessions_used < 3`: set `data_sufficient=false`, set
+   `injured_joint_trend={}`, note in `data_coverage.notes`.
+
+**Artifact `metrics` block**
+```json
+{
+  "score": 55.0,
+  "trend": "worsening",
+  "sessions_used": 4,
+  "data_sufficient": true,
+  "injured_joint_trend": {
+    "left_knee_flexion": {
+      "direction": "worsening",
+      "rom_values": [83, 79, 71, 65],
+      "delta_vs_earliest": -18,
+      "range_pct_delta": 0.28
+    }
+  }
+}
+```
+
+`upstream_artifact_ids`: the pose artifact IDs for the sessions whose joint ROM
+values were used.
+
+**Dependency**: Phase 2 requires Phase 1 to be complete so that prior pose
+artifacts exist in `agent_artifacts`.
+
+---
 
 ### `reporter_agent`
 
-Should pass:
-- the narrative summary
-- section-to-evidence mapping
-- claims grouped by theme
-- recommendations tied to specific deficits
+**Inputs (passed from orchestrator — unchanged)**
+- `intake: dict`, `pose: dict`, `fall_risk: dict`, `reinjury_risk: dict`
+- Last 3 `Summary(agent_name="reporter")` rows from DB
 
-## E. Gate RAG explicitly
+**Output (new field added to `ReporterOutput`)**
 
-If no relevant clinical context is retrieved:
-- mark `rag_used=false`
-- say the report was generated without guideline context
-- never imply the report is literature-grounded
+| Field | Notes |
+|---|---|
+| `summary` | already exists |
+| `session_highlights` | already exists |
+| `recommendations` | already exists |
+| `evidence_map` | new — maps each report section to the specific metrics that support it |
 
-If RAG is used:
-- store source document metadata in the artifact
-- store the exact retrieval query
+**`evidence_map` structure**
+```json
+{
+  "fall_risk_section": ["fall_risk_score=42", "fppa_peak_mean=9.1"],
+  "reinjury_risk_section": ["left_knee_flexion ROM declining over 4 sessions"],
+  "recommendations_section": ["knee_flexion ROM below 40% of expected", "pain=7/10"]
+}
+```
 
----
+The LLM prompt must be updated to return `evidence_map` as part of the required
+JSON output schema.
 
-## Minimal Implementation Plan
+**Artifact `metrics` block**
+```json
+{
+  "session_id": "uuid",
+  "fall_risk_score": 42.0,
+  "reinjury_risk_score": 55.0,
+  "rom_score": 64.5,
+  "pain_avg": 4.5,
+  "evidence_map": { "..." }
+}
+```
 
-## Phase 1: make outputs durable and machine-readable
-
-Changes:
-- add `agent_artifacts` table
-- persist one artifact per agent run
-- keep existing `summaries` table unchanged
-
-Outcome:
-- no behavior change yet
-- immediate traceability improvement
-
-## Phase 2: feed artifacts to `progress_agent`
-
-Changes:
-- build `ProgressInputPacket` from artifacts + summaries + scores
-- stop prompting `progress_agent` with summaries alone
-- keep current report shape
-
-Outcome:
-- progress remains a summary-of-summaries layer
-- but now it has structured evidence to select from
-
-## Phase 3: deterministic salience selector
-
-Changes:
-- add a pre-LLM salience pass
-- rank sessions / deltas / milestones before report generation
-
-Outcome:
-- less repetitive reporting
-- fewer unsupported claims
-- easier debugging
-
-## Phase 4: evidence-linked reporting
-
-Changes:
-- add section-to-evidence mapping in progress artifacts
-- optionally surface evidence links in UI / admin tools
-
-Outcome:
-- clinician can inspect why the report said what it said
+`upstream_artifact_ids`: fall_risk artifact ID + reinjury_risk artifact ID for
+this session.
 
 ---
 
-## How This Should Work In Agentverse
+### `progress_agent` — Four-Layer Redesign
 
-## Short answer
+**Current problem**: receives only prose summaries + two aggregate floats. The
+LLM rewrites everything from scratch each time with no traceability.
 
-Yes, the architecture can be moved to Agentverse, but **only if message-passing
-is separated from persistence and replay**.
-
-If the hackathon requires Agentverse, the right move is:
-- move orchestration and agent-to-agent communication to Agentverse/uAgents
-- keep Postgres as the system of record
-- keep the mobile app talking to a thin ingress service that writes to DB and
-  dispatches an Agentverse job
-
-## What changes if the entire agent infrastructure runs on Agentverse
-
-### 1. Shared in-process DB assumptions break
-
-The current HTTP pipeline relies on:
-- one orchestrator function
-- one async DB session
-- ordered in-process execution
-
-In a full Agentverse topology, agents are separate workers receiving messages.
-That means:
-- no shared SQLAlchemy session
-- no in-memory passing of objects between stages
-- no guarantee that downstream agents run immediately
-
-Required change:
-- persist artifacts **before** dispatching the next agent
-- pass IDs / compact packets over the wire, not Python objects
-
-### 2. Message contracts become product-critical
-
-Every agent needs a stable protocol message:
-- `SessionIngested`
-- `IntakeArtifactReady`
-- `PoseArtifactReady`
-- `FallRiskArtifactReady`
-- `ReinjuryArtifactReady`
-- `ReporterArtifactReady`
-- `ProgressRequested`
-
-Each message should carry:
-- `job_id`
-- `patient_id`
-- `session_id`
-- `artifact_id`
-- `artifact_version`
-- retry / dedupe keys
-
-### 3. Idempotency becomes mandatory
-
-Mailbox delivery and distributed retries mean the same job may be seen twice.
-
-Every agent must be safe to re-run:
-- check whether its artifact already exists for the same job + version
-- return existing artifact instead of creating duplicates
-
-### 4. Payload size must stay small
-
-Do **not** push raw frames or giant session JSON through Agentverse messages.
-
-Instead:
-- store raw data in Postgres / object storage
-- send artifact IDs and compact summaries through messages
-
-### 5. You need a supervisor / job-state model
-
-The current orchestrator is implicit.
-In Agentverse, make it explicit:
-- one supervisor/orchestrator agent owns job state
-- it dispatches the next stage only after required artifacts exist
-- it records terminal success / failure / retry state
-
-Recommended job table:
-- `agent_jobs`
-- `job_events`
-
-### 6. Progress generation fits Agentverse well
-
-`progress_agent` is a good Agentverse candidate because it is:
-- asynchronous
-- triggered after enough sessions exist
-- not user-latency critical
-
-### 7. Mobile ingress should stay thin
-
-Even in a full Agentverse hackathon submission, I would still keep:
-- FastAPI ingress (or a tiny equivalent)
-- auth
-- DB writes
-- dispatch to Agentverse
-
-Reason:
-- mobile clients are not a good place to manage signed uAgent envelopes
-- ingress is still the clean boundary for auth, validation, and persistence
-
-## Recommended Agentverse topology
-
-### Production shape
-
-1. Mobile app -> thin ingress API
-2. Ingress validates and writes session data
-3. Ingress creates a `job_id`
-4. Ingress dispatches `SessionIngested(job_id, session_id, patient_id)`
-5. Agentverse supervisor routes work to the next agent
-6. Each agent writes an artifact to Postgres
-7. Each agent emits `ArtifactReady(...)`
-8. Supervisor decides next transition
-9. `progress_agent` runs only when session threshold / trigger condition is met
-
-### Why this is hackathon-safe
-
-- Agent orchestration is genuinely on Agentverse
-- agents communicate via protocols / mailbox
-- persistence remains reliable and queryable
-- you do not rebuild your entire data plane around message envelopes
+**New design**: four deterministic stages before the LLM writes a single word.
 
 ---
 
-## Recommended Final Shape
+#### Layer 1: Longitudinal fact builder — `build_patient_timeline()`
 
-For the next implementation pass:
+Queries, all ordered chronologically:
+- `session_scores` — `fall_risk_score`, `reinjury_risk_score`, `pain_score`,
+  `rom_score` per session
+- `agent_artifacts` where `agent_name IN ("pose_analysis_agent",
+  "reinjury_risk_agent", "reporter_agent")` and `patient_id = patient_id`
+- `summaries` where `agent_name="reporter"` — prose for LLM reference
+- `Patient.metadata_json` — `injured_joints`, `rehab_phase` if present
+- `exercise_sessions` linked to each session — to set `source_type`
 
-1. Add `agent_artifacts`
-2. Introduce per-agent evidence packets
-3. Redesign `progress_agent` around salience over summaries + evidence
-4. Keep current agents, but change what they pass downstream
-5. Add explicit RAG gating and provenance
-6. Make all new artifacts idempotent and Agentverse-message-friendly
+Produces a `PatientTimeline` object:
 
-That yields an architecture that:
-- still feels agentic
-- still supports summary-of-summaries
-- maintains traceability
-- reduces hallucination pressure
-- can be moved to Agentverse without rewriting the clinical data model
+```python
+@dataclass
+class SessionFact:
+    session_id: str
+    created_at: datetime
+    source_type: str              # "pt_session" | "exercise_session"
+    scores: dict                  # {fall_risk, reinjury_risk, pain, rom}
+    injured_joint_rom: dict       # {joint_name: rom_value} from pose artifact
+    flagged_joints: list[str]     # from pose artifact
+    data_sufficient: bool         # from reinjury artifact
+    reporter_summary: str         # from summaries table
+    evidence_map: dict            # from reporter artifact
+
+@dataclass
+class PatientTimeline:
+    sessions: list[SessionFact]
+    injured_joints: list[str]
+    rehab_phase: str
+```
+
+`source_type` is `"exercise_session"` if the session has a linked
+`ExerciseSession` row; `"pt_session"` otherwise.
 
 ---
 
-## External Validation Notes
+#### Layer 2: Salience selector — `compute_salience()`
 
-This direction is aligned with:
-- NIST AI RMF / AI RMF Playbook: documentation, traceability, and provenance
-- WHO guidance on LLM use in health: human oversight and caution around
-  unsupported outputs
-- FDA guidance for clinical decision support: users should be able to review
-  the basis of recommendations
-- CDC STEADI / NIH PROMIS style assessment thinking: structured clinical inputs
-  improve the validity of downstream interpretation
-- Fetch.ai / Agentverse docs: mailbox-based agent messaging, protocols, and
-  Bureau support distributed multi-agent execution but do not replace durable
-  persistence
+Runs before any LLM call. Identifies which sessions and metrics warrant
+reporting using only arithmetic — no LLM.
+
+**Relative threshold algorithm**
+
+For each metric (`fall_risk_score`, `reinjury_risk_score`, `pain_score`,
+`rom_score`, and per injured-joint ROM values):
+
+1. Compute `score_range = max_value - min_value` across all sessions.
+   If `score_range == 0`, the metric produces no salience signal.
+
+2. A consecutive-session delta is **salient** if:
+   `abs(delta) >= 0.20 * score_range`
+
+3. A **sustained trend** is salient if:
+   - ≥ 3 consecutive sessions show the same direction of change
+   - AND cumulative delta across those sessions exceeds `0.20 * score_range`
+
+4. **Goal and milestone signals** remain LLM-determined from reporter summaries.
+   No structured goal-completion logic is added.
+
+5. A **missing-data warning** is emitted for sessions where:
+   - `SessionFact.data_sufficient == False`
+   - Reporter artifact has non-empty `data_coverage.missing_fields`
+
+**Output**
+
+```python
+@dataclass
+class SalienceReport:
+    salient_session_ids: list[str]
+    salient_metrics: dict         # {metric: {direction, delta, session_ids, why}}
+    salient_summaries: list[str]  # reporter summary text for salient sessions only
+    data_warnings: list[str]
+    why_selected: dict            # {session_id: human-readable reason string}
+```
+
+---
+
+#### Layer 3: Constrained LLM report writer
+
+The LLM receives **only** the `SalienceReport` — not all summaries, not all
+artifacts. Inputs:
+- `SalienceReport.salient_metrics` and `why_selected`
+- Selected reporter summary texts (`salient_summaries`)
+- `PatientTimeline.injured_joints` and `rehab_phase`
+- Numeric snapshot of salient sessions (scores only, no raw frames)
+
+Prompt constraints:
+- Cite only evidence present in `SalienceReport`
+- Do not infer causes not in the data
+- Explicitly name any `data_warnings`
+- Return structured JSON including `evidence_citations` per section
+
+LLM output schema:
+```json
+{
+  "longitudinal_report": "...",
+  "overall_trend": "improving | stable | declining",
+  "milestones_reached": ["..."],
+  "next_goals": ["..."],
+  "evidence_citations": {
+    "trend_section": ["session_id ROM +18% over sessions 3–5"],
+    "milestone_section": ["..."],
+    "recommendation_section": ["..."]
+  }
+}
+```
+
+---
+
+#### Layer 4: Progress artifact
+
+Persists an `AgentEvidencePacket` containing:
+- `session_ids_used` — salient sessions only
+- `metrics_used` — the `SalienceReport.salient_metrics` block
+- `summaries_used` — which reporter Summary IDs were included
+- `evidence_citations` — the LLM's own citations
+
+---
+
+## RAG Gating
+
+Applies to `fall_risk_agent` (currently uses RAG). Pattern for any future agent
+that adds RAG.
+
+Change `rag/retriever.py` to return a structured result instead of a bare string:
+
+```python
+@dataclass
+class RagResult:
+    context: str
+    sources: list[str]   # document titles or chunk IDs
+    hit_count: int
+```
+
+Callers gate on `hit_count == 0`:
+- If 0: set `rag_used=false` in artifact; remove guideline language from prompt;
+  add note to `data_coverage.notes`
+- If > 0: set `rag_used=true`; populate `rag_query` and `rag_sources`
+
+---
+
+## Implementation Phases
+
+### Phase 1 — Artifact persistence (no behavior change)
+
+**Goal**: Every agent writes a durable artifact. Nothing downstream changes yet.
+
+**New files**
+- `db/migrations/xxxx_add_agent_artifacts.py` — Alembic migration for
+  `agent_artifacts` table (columns and indexes as defined above)
+- `utils/artifacts.py` — `write_artifact()` with idempotency check
+
+**Changed files**
+
+| File | Change |
+|---|---|
+| `db/models.py` | Add `AgentArtifact` ORM model |
+| `rag/retriever.py` | Return `RagResult` instead of bare `str` |
+| `agents/intake.py` | Call `write_artifact` at end of `run_intake` |
+| `agents/pose_analysis.py` | Add `frame_count`, `joint_coverage` to output; call `write_artifact` |
+| `agents/fall_risk.py` | Capture `rag_used` + `rag_sources` from `RagResult`; call `write_artifact` |
+| `agents/reinjury_risk.py` | Call `write_artifact` |
+| `agents/reporter.py` | Update LLM prompt to return `evidence_map`; call `write_artifact` |
+| `agents/progress.py` | Call `write_artifact` |
+| `schemas/session.py` | Add `frame_count`, `joint_coverage` to `PoseAnalysisOutput`; add `rag_used`, `rag_sources` to `FallRiskOutput`; add `evidence_map` to `ReporterOutput` |
+| `agents/messages.py` | Mirror the above schema additions in message models |
+
+**Outcome**: All agents produce durable artifacts. Behavior is identical to today.
+
+---
+
+### Phase 2 — Reinjury risk reads joint history from artifacts
+
+**Goal**: `reinjury_risk_agent` grounds its assessment in per-joint ROM history,
+not just aggregate session scores.
+
+**Dependency**: Phase 1 complete (pose artifacts exist in DB).
+
+**Changed files**
+
+| File | Change |
+|---|---|
+| `agents/reinjury_risk.py` | Replace `SessionScore`-only query with three queries: (1) prior pose artifacts for injured joints, (2) `RepAnalysis` rows for exercise sessions using the joint→feature lookup table, (3) existing `SessionScore` aggregate; compute `injured_joint_trend` deterministically; set `data_sufficient` |
+| `schemas/session.py` | Add `sessions_used`, `data_sufficient`, `injured_joint_trend` to `ReinjuryRiskOutput` |
+| `agents/messages.py` | Add new fields to `ReinjuryRiskResponse` |
+
+**Outcome**: Reinjury risk is grounded in specific joint-level history. The
+`data_sufficient` flag surfaces to the reporter and progress layers.
+
+---
+
+### Phase 3 — Progress agent four-layer redesign
+
+**Goal**: Progress report is built from structured evidence, not prose.
+
+**Dependency**: Phase 1 complete (reporter artifacts with `evidence_map` exist).
+
+**New files**
+- `agents/progress_salience.py` — two pure async functions:
+  - `build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTimeline`
+  - `compute_salience(timeline: PatientTimeline) -> SalienceReport`
+  Both are standalone and testable without an LLM.
+
+**Changed files**
+
+| File | Change |
+|---|---|
+| `agents/progress.py` | Replace current single-query/prompt with four-layer sequence: call `build_patient_timeline`, call `compute_salience`, build constrained prompt from `SalienceReport`, write artifact with `evidence_citations` |
+| `schemas/session.py` | Add `evidence_citations: dict` to `ProgressOutput` |
+
+**Outcome**: Every claim in a progress report is traceable to specific sessions
+and metrics. The LLM receives only salient evidence and produces fewer
+unsupported claims.
+
+---
+
+### Phase 4 — Intake enrichment from patient metadata
+
+**Goal**: Intake reads clinical fields from `Patient.metadata_json` when present,
+rather than inferring everything from `pt_plan` text.
+
+**Dependency**: Partially unblocked now. The intake agent can be updated
+immediately. Richer outputs will follow automatically as the front-end starts
+sending clinical metadata.
+
+**Changed files**
+
+| File | Change |
+|---|---|
+| `agents/intake.py` | Load `Patient.metadata_json`; extract clinical fields; set `data_confidence`; update LLM prompt to use or guess missing clinical fields |
+| `schemas/session.py` | Add `injured_joints`, `injured_side`, `rehab_phase`, `contraindications`, `data_confidence` to `IntakeOutput` |
+| `agents/messages.py` | Update `IntakeResponse` |
+| `agents/fall_risk.py` | Read `injured_joints` and `rehab_phase` from intake artifact and pass into the fall risk LLM prompt |
+
+**Outcome**: When clinical metadata is present, all downstream agents have
+explicit injury context. When absent, behavior degrades gracefully with
+`data_confidence="missing"` recorded in the artifact.
