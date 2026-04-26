@@ -65,6 +65,7 @@ import { BACKEND_URL, LOCAL_EXPORTS_URL } from '../constants';
 import {
   buildGhostExerciseInjection,
   buildGhostRecordingLayoutInjection,
+  buildCameraSwitchInjection,
   POSE_HTML,
   POSE_WEBVIEW_KEY,
 } from '../engine/poseHtml';
@@ -156,6 +157,7 @@ export default function SessionScreen() {
   const [initialized, setInitialized] = useState(false);
   const [webViewActive, setWebViewActive] = useState(false);
   const [webViewReady, setWebViewReady] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<'user' | 'environment'>('user');
 
   // ── Session state ─────────────────────────────────────────────────────────
   const [sessionState, setSessionState] = useState<SessionState>('idle');
@@ -510,6 +512,14 @@ export default function SessionScreen() {
     ]);
   }, [finishCurrentExercise, finalizeSession]);
 
+  const toggleCamera = useCallback(() => {
+    const next = cameraFacing === 'user' ? 'environment' : 'user';
+    setCameraFacing(next);
+    try {
+      webViewRef.current?.injectJavaScript(buildCameraSwitchInjection(next));
+    } catch { /* non-fatal */ }
+  }, [cameraFacing]);
+
   // ── Reset profile ─────────────────────────────────────────────────────────
   const handleHeaderBack = () => {
     if (sessionState === 'recording' || sessionState === 'analyzing') {
@@ -558,6 +568,13 @@ export default function SessionScreen() {
             sessionState={sessionState}
             timeLeft={timeLeft}
           />
+          <TouchableOpacity
+            style={styles.topButton}
+            onPress={toggleCamera}
+            disabled={!webViewReady}
+          >
+            <Text style={styles.topButtonText}>{'⇄'}</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.exercisePillWrap}>

@@ -539,7 +539,7 @@ export async function shareSessionViaSheet(
   try {
     const result = await Share.share(
       { message, title: `sentinel-${payload.exerciseId}.json` },
-      { subject: `Sentinel exercise ${payload.exerciseId}` },
+      { subject: `onTrack exercise ${payload.exerciseId}` },
     );
     return { ok: result.action !== Share.dismissedAction, action: result.action };
   } catch (e) {
@@ -661,7 +661,7 @@ export async function shareMultiSessionViaSheet(
   try {
     const result = await Share.share(
       { message, title: `sentinel-${payload.session.sessionId}.json` },
-      { subject: `Sentinel session ${payload.session.sessionId}` },
+      { subject: `onTrack session ${payload.session.sessionId}` },
     );
     return { ok: result.action !== Share.dismissedAction, action: result.action };
   } catch (e) {

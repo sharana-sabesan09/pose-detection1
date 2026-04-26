@@ -193,6 +193,26 @@ export const POSE_HTML = `
       resetGhostScaleLocks();
     };
 
+    window.__switchCamera = async function(facingMode) {
+      try {
+        if (video.srcObject) {
+          video.srcObject.getTracks().forEach(function(t) { t.stop(); });
+          video.srcObject = null;
+        }
+        var mirror = facingMode === 'user';
+        video.style.transform = mirror ? 'scaleX(-1)' : 'none';
+        canvas.style.transform = mirror ? 'scaleX(-1)' : 'none';
+        lastTs = -1;
+        var stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+        video.srcObject = stream;
+      } catch(e) {
+        msg.textContent = 'Camera error: ' + e.message;
+      }
+    };
+
     function alignGhostLm(lm, vw, vh, scale, ox, oy, W, H) {
       return {
         x: (lm.x * vw * scale + ox) / W,
@@ -552,6 +572,10 @@ export function buildGhostExerciseInjection(exercise: string | null | undefined)
   return `try { window.__setGhostExercise && window.__setGhostExercise(${JSON.stringify(
     ghostExercise,
   )}); } catch (e) {} true;`;
+}
+
+export function buildCameraSwitchInjection(facingMode: 'user' | 'environment'): string {
+  return `try { window.__switchCamera && window.__switchCamera(${JSON.stringify(facingMode)}); } catch(e) {} true;`;
 }
 
 /** Call when user starts a calibration rep recording — fullscreen trainer panel, then corner PiP. */
