@@ -13,6 +13,8 @@
  * places every joint exactly where the video pixel appears on screen.
  */
 
+import { GHOST_CYCLE_BY_EXERCISE } from './calibrationGhostCycles.generated';
+
 export const POSE_HTML = `
 <!DOCTYPE html>
 <html>
@@ -92,6 +94,89 @@ export const POSE_HTML = `
     const draw = new DrawingUtils(ctx);
     let lastTs = -1;
 
+    // ── Live ghost trainer (looped reference pose from bundled calibration cycles)
+    const GHOST_CYCLES = ${JSON.stringify(GHOST_CYCLE_BY_EXERCISE)};
+    const GHOST_CONNECTIONS = [
+      [11,12],[11,23],[12,24],[23,24],
+      [23,25],[25,27],[27,29],[24,26],[26,28],[28,30],
+      [11,13],[13,15],[12,14],[14,16],
+    ];
+
+    const lrPartner = (() => {
+      const p = Array.from({ length: 33 }, (_, i) => i);
+      const swap = (a, b) => { const t = p[a]; p[a] = p[b]; p[b] = t; };
+      swap(1,4); swap(2,5); swap(3,6); swap(7,8); swap(9,10);
+      swap(11,12); swap(13,14); swap(15,16); swap(17,18); swap(19,20);
+      swap(21,22); swap(23,24); swap(25,26); swap(27,28); swap(29,30); swap(31,32);
+      return p;
+    })();
+
+    let ghostExercise = 'leftSls';
+    let ghostMirror = false;
+    let ghostRefIdx = 0;
+    let lastRefTs = 0;
+
+    window.__setGhostExercise = (ex) => {
+      ghostExercise = ex || 'leftSls';
+      ghostMirror = ghostExercise === 'rightSls' || ghostExercise === 'rightLsd';
+      ghostRefIdx = 0;
+    };
+
+    function mirrorLandmarks(frame) {
+      const out = new Array(33);
+      for (let i = 0; i < 33; i++) {
+        const src = frame[lrPartner[i]];
+        out[i] = { x: 1 - src.x, y: src.y, z: src.z, v: src.v };
+      }
+      return out;
+    }
+
+    function alignGhostLm(lm, vw, vh, scale, ox, oy, W, H) {
+      return {
+        x: (lm.x * vw * scale + ox) / W,
+        y: (lm.y * vh * scale + oy) / H,
+        z: lm.z,
+        v: lm.v,
+      };
+    }
+
+    function drawGhost(W, H) {
+      const cycle = GHOST_CYCLES[ghostExercise];
+      if (!cycle || !cycle.length) return;
+
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const scale   = Math.max(W / vw, H / vh);
+      const offsetX = (W - vw * scale) / 2;
+      const offsetY = (H - vh * scale) / 2;
+
+      const raw = cycle[ghostRefIdx % cycle.length];
+      const frame = ghostMirror ? mirrorLandmarks(raw) : raw;
+
+      ctx.save();
+      ctx.globalAlpha = 0.42;
+      ctx.strokeStyle = '#3cdc3c';
+      ctx.lineWidth = 2.2;
+      ctx.lineCap = 'round';
+      ctx.fillStyle = '#3cdc3c';
+      for (const [a, b] of GHOST_CONNECTIONS) {
+        const la = alignGhostLm(frame[a], vw, vh, scale, offsetX, offsetY, W, H);
+        const lb = alignGhostLm(frame[b], vw, vh, scale, offsetX, offsetY, W, H);
+        if (la.v < 0.2 || lb.v < 0.2) continue;
+        ctx.beginPath();
+        ctx.moveTo(la.x * W, la.y * H);
+        ctx.lineTo(lb.x * W, lb.y * H);
+        ctx.stroke();
+      }
+      for (const lm of frame) {
+        const p = alignGhostLm(lm, vw, vh, scale, offsetX, offsetY, W, H);
+        if (p.v < 0.2) continue;
+        ctx.beginPath();
+        ctx.arc(p.x * W, p.y * H, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
@@ -103,66 +188,6 @@ export const POSE_HTML = `
       loop();
     } catch (e) {
       msg.textContent = 'Camera error: ' + e.message;
-    }
-
-    // ── Reference ghost skeleton (single-leg squat cycle) ──────────────────
-    const _C = (x, y, v = 0.0) => ({ x, y, v });
-    const STAND = {
-       0: _C(0.50,0.10,1), 7: _C(0.47,0.11,1), 8: _C(0.53,0.11,1),
-      11: _C(0.43,0.22,1),12: _C(0.57,0.22,1),13: _C(0.46,0.30,1),
-      14: _C(0.54,0.30,1),15: _C(0.495,0.36,1),16: _C(0.505,0.36,1),
-      23: _C(0.47,0.55,1),24: _C(0.54,0.56,1),25: _C(0.48,0.72,1),
-      26: _C(0.54,0.47,1),27: _C(0.49,0.88,1),28: _C(0.54,0.56,1),
-      29: _C(0.48,0.91,1),30: _C(0.55,0.58,1),
-    };
-    const BOTTOM = {
-       0: _C(0.50,0.12,1), 7: _C(0.47,0.13,1), 8: _C(0.53,0.13,1),
-      11: _C(0.43,0.24,1),12: _C(0.57,0.24,1),13: _C(0.46,0.32,1),
-      14: _C(0.54,0.32,1),15: _C(0.495,0.40,1),16: _C(0.505,0.40,1),
-      23: _C(0.48,0.60,1),24: _C(0.54,0.58,1),25: _C(0.51,0.74,1),
-      26: _C(0.54,0.48,1),27: _C(0.50,0.88,1),28: _C(0.54,0.57,1),
-      29: _C(0.49,0.91,1),30: _C(0.55,0.59,1),
-    };
-    const REF_FRAMES = 60;
-    const refCycle = Array.from({ length: REF_FRAMES }, (_, i) => {
-      const t = (1 - Math.cos((i / (REF_FRAMES - 1)) * Math.PI)) / 2;
-      return Array.from({ length: 33 }, (__, idx) => {
-        const s = STAND[idx]  || _C(0.5, 0.5, 0);
-        const b = BOTTOM[idx] || _C(0.5, 0.5, 0);
-        return { x: s.x + (b.x - s.x) * t, y: s.y + (b.y - s.y) * t, v: s.v };
-      });
-    });
-    const GHOST_CONNECTIONS = [
-      [11,12],[11,23],[12,24],[23,24],
-      [23,25],[25,27],[27,29],[24,26],[26,28],[28,30],
-      [11,13],[13,15],[12,14],[14,16],
-    ];
-    let refIdx = 0;
-    let lastRefTs = 0;
-
-    function drawGhost(W, H) {
-      const frame = refCycle[refIdx];
-      ctx.save();
-      ctx.globalAlpha = 0.42;
-      ctx.strokeStyle = '#3cdc3c';
-      ctx.lineWidth = 2.2;
-      ctx.lineCap = 'round';
-      ctx.fillStyle = '#3cdc3c';
-      for (const [a, b] of GHOST_CONNECTIONS) {
-        const la = frame[a], lb = frame[b];
-        if (la.v < 0.2 || lb.v < 0.2) continue;
-        ctx.beginPath();
-        ctx.moveTo(la.x * W, la.y * H);
-        ctx.lineTo(lb.x * W, lb.y * H);
-        ctx.stroke();
-      }
-      for (const lm of frame) {
-        if (lm.v < 0.2) continue;
-        ctx.beginPath();
-        ctx.arc(lm.x * W, lm.y * H, 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
     }
 
     function loop() {
@@ -184,7 +209,9 @@ export const POSE_HTML = `
       // Advance reference frame at ~30 fps (one step per ~33ms of video time)
       const now = performance.now();
       if (now - lastRefTs >= 33) {
-        refIdx = (refIdx + 1) % REF_FRAMES;
+        const cycle = GHOST_CYCLES[ghostExercise];
+        const n = cycle && cycle.length ? cycle.length : 1;
+        ghostRefIdx = (ghostRefIdx + 1) % n;
         lastRefTs = now;
       }
 

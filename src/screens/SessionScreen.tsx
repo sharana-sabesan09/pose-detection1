@@ -283,6 +283,15 @@ export default function SessionScreen() {
     exerciseStartedAtRef.current = Date.now();
     pipelineRef.current = new ExercisePipeline(currentExercise);
     detectorsRef.current.reset(); // fresh per-exercise live windows
+    // Tell the WebView which reference "ghost trainer" loop to show for this exercise.
+    try {
+      const js = `try { window.__setGhostExercise && window.__setGhostExercise(${JSON.stringify(
+        currentExercise,
+      )}); } catch (e) {} true;`;
+      webViewRef.current?.injectJavaScript(js);
+    } catch {
+      /* non-fatal */
+    }
     setSessionState('recording');
   }, [currentExercise]);
 
