@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Float, Integer, ForeignKey, Text, DateTime, JSON, Boolean
+from sqlalchemy import Column, String, Float, Integer, ForeignKey, Text, DateTime, JSON, Boolean, Index
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 # Use plain String(36) for UUIDs — works on both SQLite and PostgreSQL.
@@ -106,6 +106,7 @@ class ExerciseSession(Base):
     duration_ms = Column(Float, nullable=False)
     # Aggregate summary stats (avgDepth, consistency, overallRating, etc.)
     summary_json = Column(JSON, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
     reps_csv = Column(Text, nullable=True)
     frame_features_csv = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -163,6 +164,25 @@ class RepAnalysis(Base):
     confidence = Column(Float, nullable=True)
 
     exercise_session = relationship("ExerciseSession", back_populates="reps")
+
+
+class AgentArtifact(Base):
+    __tablename__ = "agent_artifacts"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    session_id = Column(String(36), ForeignKey("sessions.id"), nullable=True)
+    patient_id = Column(String(36), ForeignKey("patients.id"), nullable=True)
+    agent_name = Column(String(64), nullable=False)
+    artifact_kind = Column(String(64), nullable=False)
+    artifact_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    upstream_artifact_ids_json = Column(JSON, nullable=False, default=list)
+    data_coverage_json = Column(JSON, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_aa_session_agent", "session_id", "agent_name"),
+        Index("ix_aa_patient_agent_time", "patient_id", "agent_name", "created_at"),
+    )
 
 
 class AuditLog(Base):

@@ -20,12 +20,13 @@ backend/
 │   ├── agentverse_agent.py  Orchestrator uAgent (mailbox, ctx.send dispatch)
 │   ├── bureau.py            Assembles all uAgents into one Bureau
 │   ├── orchestrator.py      HTTP-path pipeline (direct async function calls)
-│   ├── intake.py            Normalise pain scores + extract target joints
-│   ├── pose_analysis.py     Aggregate pose frames → ROM + flagged joints
-│   ├── fall_risk.py         Fall risk score + reasoning
-│   ├── reinjury_risk.py     Re-injury risk trend
-│   ├── reporter.py          Session summary + recommendations
-│   ├── progress.py          Longitudinal report (triggers at ≥3 sessions)
+│   ├── intake.py            Normalise pain scores + enrich from Patient.metadata_json
+│   ├── pose_analysis.py     Aggregate pose frames → ROM + flagged joints + artifact
+│   ├── fall_risk.py         Fall risk score + RAG gating + artifact
+│   ├── reinjury_risk.py     Re-injury risk — joint-level trend from pose artifacts + RepAnalysis
+│   ├── reporter.py          Session summary + evidence_map + artifact
+│   ├── progress.py          Longitudinal report — four-layer (timeline→salience→LLM→artifact)
+│   ├── progress_salience.py build_patient_timeline() + compute_salience() (no LLM)
 │   ├── exercise_reporter.py Direct clinical pipeline for mobile exercise sessions
 │   └── hipaa.py             PHI redaction wrapper (Presidio + audit write)
 │
@@ -60,6 +61,7 @@ backend/
 │
 └── utils/
     ├── audit.py             write_audit() — appends to audit_log table
+    ├── artifacts.py         write_artifact() / get_artifact_id() — idempotent artifact persistence
     ├── frame_csv.py         parse_frame_features_csv() — CSV → PoseFrame rows
     └── phi_scanner.py       Presidio scan_and_redact() helper
 ```
@@ -78,14 +80,17 @@ backend/
 | `accumulated_scores` | Rolling averages per patient (fall + reinjury risk) |
 | `pose_frames` | Raw per-frame pose data (`angles_json`) from live capture |
 | `summaries` | Agent output text (one row per agent per session) |
+| `agent_artifacts` | Durable machine-readable artifact per agent per session. Indexed on `(session_id, agent_name)` and `(patient_id, agent_name, created_at)`. Each artifact stores its upstream dependencies, data coverage flags, and agent-specific metrics. |
 | `audit_log` | Append-only HIPAA audit trail |
 | `exercise_sessions` | Top-level squat (or other exercise) session, sent by mobile |
 | `rep_analyses` | One row per rep — all 12 biomechanical features as typed columns |
 
-`patients.metadata_json` stores the mobile intake profile
-(`age`, `gender`, `heightCm`, `weightKg`, `bmi`, `demographicRiskScore`).
-That makes the backend patient row the canonical metadata record instead of
-leaving the intake profile only on the phone.
+`patients.metadata_json` stores both demographic and clinical fields:
+- Demographics: `age`, `gender`, `heightCm`, `weightKg`, `bmi`, `demographicRiskScore`
+- Clinical (set via front-end registration): `injured_joints`, `injured_side`, `rehab_phase`, `diagnosis`, `contraindications`, `restrictions`
+
+When clinical fields are present, every agent in the pipeline uses them to anchor its analysis.
+See `FRONTEND_DATA_REQUIREMENTS.md` (project root) for the full field specification.
 
 ### Exercise session schema
 
@@ -96,7 +101,8 @@ The backend stores the upload in three places:
 **`exercise_sessions`** holds the session-level envelope: `mobile_session_id`
 (the ISO timestamp from the phone, `unique`), `exercise`, `num_reps`, timing ms
 fields, `summary_json` (aggregate stats: avgDepth, avgFppa, consistency,
-overallRating), plus the uploaded CSV artifacts `reps_csv` and
+overallRating), `metadata_json` (voice-derived session metadata from the
+mobile app), plus the uploaded CSV artifacts `reps_csv` and
 `frame_features_csv`.
 
 **`rep_analyses`** holds one row per rep with flat, typed columns for every feature and error flag — making them directly queryable for analytics without JSON extraction:
@@ -150,6 +156,7 @@ Token lifetime: 24 hours. Algorithm: HS256. Secret: `JWT_SECRET` env var.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
+| POST | `/sessions/voice-metadata/extract` | JWT | Deterministically transform a raw transcript into a typed `sessionMetadata.voice` block that the mobile app can attach to the final exercise upload. |
 | POST | `/sessions/exercise-result` | JWT | Receive a complete processed session from the mobile app (squat etc.), persist the schema and uploaded CSV artifacts to `exercise_sessions`, rep rows to `rep_analyses`, and parsed frame-feature rows to `pose_frames` via a linked companion session. Returns 409 if the same `sessionId` was already stored. |
 
 ### Patients
@@ -184,29 +191,28 @@ Token lifetime: 24 hours. Algorithm: HS256. Secret: `JWT_SECRET` env var.
 
 ## Agent pipeline
 
-Three execution paths exist. The PT HTTP path powers clinician-style
-`/sessions/{id}/end`, the exercise HTTP path powers mobile uploads to
-`/sessions/exercise-result`, and the Agentverse path enables external
-orchestration via Fetch.ai.
+Two active execution paths exist.
 
-### HTTP path (`orchestrator.py`)
+### PT HTTP path (`orchestrator.py`)
 
 Called by `POST /sessions/{id}/end`. Runs agents as direct async function calls inside the FastAPI request:
 
 ```
-run_intake()
+run_intake()          ← enriches from Patient.metadata_json (clinical fields)
     ↓
-run_pose_analysis()
+run_pose_analysis()   ← adds frame_count, joint_coverage; writes pose artifact
     ↓
-run_fall_risk()   ← sequential (same db session — concurrent gather
-run_reinjury_risk()  would cause illegal concurrent commits)
+run_fall_risk()       ← uses RagResult gating; writes fall_risk artifact
+run_reinjury_risk()   ← reads pose artifacts + RepAnalysis for joint-level trend; writes artifact
     ↓
-run_reporter()
+run_reporter()        ← returns evidence_map; writes reporter artifact
     ↓
-run_progress()   ← only if patient has ≥ 3 sessions
+run_progress()        ← four-layer: timeline → salience → LLM → artifact  (≥3 sessions only)
 ```
 
-Each step is wrapped in its own `try/except`. If a step fails, `failed_agents` is populated, the current results are committed, and the pipeline short-circuits — no downstream agent runs. This ensures partial results are never lost.
+Each step is wrapped in its own `try/except`. If a step fails, `failed_agents` is populated, the current results are committed, and the pipeline short-circuits.
+
+**Artifact persistence**: every agent writes one row to `agent_artifacts` at the end of its run, idempotent on `(session_id, agent_name)`. Downstream agents query these artifacts for per-joint historical data rather than re-deriving it from prose summaries.
 
 A single `db.commit()` at the end commits everything accumulated across all agents.
 
@@ -220,21 +226,14 @@ artifacts. The backend then:
 3. stores the uploaded envelope in `exercise_sessions`
 4. stores one row per rep in `rep_analyses`
 5. parses `frameFeaturesCsv` into `pose_frames`
-6. runs `exercise_reporter_agent` in the background
+6. runs `exercise_reporter_agent` in the background (separate Med Gemma pipeline planned)
 7. runs `progress_agent` if the patient has 3+ linked sessions
 
-### Agentverse path (`agentverse_agent.py` + `bureau.py`)
+### Agentverse path (optional external)
 
-The `physio-orchestrator` uAgent holds a Fetch.ai mailbox key and is registered on Agentverse. External systems send it a `SessionRequestMessage`. It dispatches via `ctx.send()` through the same logical pipeline, communicating with sub-agents via typed `uagents.Model` messages defined in `agents/messages.py`.
+`run_agent.py` starts the Fetch.ai Bureau alongside FastAPI. The Bureau runs uAgent wrappers for all pipeline agents. The `physio-orchestrator` uAgent holds a Fetch.ai mailbox key and can receive external `SessionRequestMessage` from Agentverse. This path is optional — the HTTP pipeline functions independently without it.
 
-`run_agent.py` starts both:
-- FastAPI on port 8000 (daemon thread)
-- The Fetch.ai `Bureau` (blocking main thread) which runs all 8 uAgents together
-
-The active Bureau now includes `patient_advisor_agent`, which can answer
-patient-facing symptom or "what should I do?" questions using stored patient
-context. It is intentionally conservative: it does not diagnose, it surfaces
-urgent escalation flags, and it writes an audit trail like the other agents.
+`patient_advisor_agent` is available via `POST /patients/{patient_id}/advice` and via Bureau. It answers patient-facing questions using stored patient context and is intentionally conservative: no diagnosis, surfaces urgent escalation flags, writes an audit trail.
 
 ### HIPAA middleware
 

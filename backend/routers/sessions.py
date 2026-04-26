@@ -9,9 +9,11 @@ from db.models import Session, PoseFrame, ExerciseSession, RepAnalysis, Patient
 from schemas.session import IntakeInput, ReporterOutput
 from schemas.report import SessionStartRequest, SessionStartResponse, FrameRequest
 from schemas.exercise import ExerciseSessionResult, ExerciseSessionResponse
+from schemas.voice import VoiceMetadataExtractRequest, VoiceMetadataExtractResponse
 from agents.orchestrator import run_session_pipeline, run_exercise_pipeline
 from routers.auth import require_jwt
 from utils.frame_csv import parse_frame_features_csv
+from utils.voice_metadata import build_session_metadata_from_voice
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -92,6 +94,18 @@ async def end_session(
     return ReporterOutput(**reporter)
 
 
+@router.post("/voice-metadata/extract", response_model=VoiceMetadataExtractResponse)
+async def extract_voice_metadata(
+    body: VoiceMetadataExtractRequest,
+    _user=Depends(require_jwt),
+):
+    normalized, session_metadata = build_session_metadata_from_voice(body)
+    return VoiceMetadataExtractResponse(
+        normalizedTranscript=normalized,
+        sessionMetadata=session_metadata,
+    )
+
+
 @router.post("/exercise-result", response_model=ExerciseSessionResponse, status_code=201)
 async def store_exercise_result(
     body: ExerciseSessionResult,
@@ -128,6 +142,7 @@ async def store_exercise_result(
         ended_at_ms=body.endedAtMs,
         duration_ms=body.durationMs,
         summary_json=body.summary.summary.model_dump(),
+        metadata_json=body.sessionMetadata.model_dump() if body.sessionMetadata else None,
         reps_csv=body.repsCsv,
         frame_features_csv=body.frameFeaturesCsv,
         linked_session_id=linked_session.id,

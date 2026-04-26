@@ -35,7 +35,7 @@ async def run_session_pipeline(
         return {"failed_agents": failed_agents, **results}
 
     try:
-        pose_output = await run_pose_analysis(session_id, db)
+        pose_output = await run_pose_analysis(session_id, db, patient_id=patient_id)
         results["pose_analysis"] = pose_output.model_dump()
     except Exception as e:
         logger.error("pose_analysis agent failed: %s", e)

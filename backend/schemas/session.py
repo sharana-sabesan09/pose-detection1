@@ -7,18 +7,28 @@ class IntakeInput(BaseModel):
     pt_plan: str
     pain_scores: dict
     user_input: str
+    session_type: str = "treatment"  # "assessment" | "treatment" | "home_exercise_check"
 
 
 class IntakeOutput(BaseModel):
     normalized_pain_scores: dict
     target_joints: list[str]
     session_goals: list[str]
+    session_type: str = "treatment"
+    # Clinical metadata — populated from Patient.metadata_json when available
+    injured_joints: list[str] = []
+    injured_side: str = "unknown"
+    rehab_phase: str = "unknown"
+    contraindications: list[str] = []
+    data_confidence: str = "missing"  # "explicit" | "inferred" | "missing"
 
 
 class PoseAnalysisOutput(BaseModel):
     rom_score: float
     joint_stats: dict
     flagged_joints: list[str]
+    frame_count: int = 0
+    joint_coverage: dict = {}  # {joint_name: frame_count}
 
 
 class FallRiskOutput(BaseModel):
@@ -26,18 +36,24 @@ class FallRiskOutput(BaseModel):
     risk_level: str
     reasoning: str
     contributing_factors: list[str]
+    rag_used: bool = False
+    rag_sources: list[str] = []
 
 
 class ReinjuryRiskOutput(BaseModel):
     score: float
     trend: str
     reasoning: str
+    sessions_used: int = 0
+    data_sufficient: bool = False
+    injured_joint_trend: dict = {}
 
 
 class ReporterOutput(BaseModel):
     summary: str
     session_highlights: list[str]
     recommendations: list[str]
+    evidence_map: dict = {}
 
 
 class ProgressOutput(BaseModel):
@@ -45,6 +61,7 @@ class ProgressOutput(BaseModel):
     overall_trend: str
     milestones_reached: list[str]
     next_goals: list[str]
+    evidence_citations: dict = {}
 
 
 class ExerciseReporterOutput(BaseModel):
