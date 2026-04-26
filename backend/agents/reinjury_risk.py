@@ -167,11 +167,21 @@ async def run_reinjury_risk(
 
     # ── Compute injured_joint_trend deterministically ──────────────────────────
     injured_joint_trend: dict = {}
-    sessions_with_data = 0
+    sessions_with_data = 0  # max across joints, for informational sessions_used field
 
     for joint, rom_values in joint_rom_history.items():
-        sessions_with_data = max(sessions_with_data, len(rom_values))
-        if len(rom_values) < 2:
+        n_sessions = len(rom_values)
+        sessions_with_data = max(sessions_with_data, n_sessions)
+        joint_data_sufficient = n_sessions >= 3
+        if n_sessions < 2:
+            # Record the joint even without enough data for a trend
+            injured_joint_trend[joint] = {
+                "direction": "unknown",
+                "rom_values": [round(v, 2) for v in rom_values],
+                "delta_vs_earliest": 0.0,
+                "range_pct_delta": 0.0,
+                "data_sufficient": joint_data_sufficient,
+            }
             continue
         trend_dir = _compute_trend(rom_values)
         score_range = max(rom_values) - min(rom_values)
@@ -180,9 +190,16 @@ async def run_reinjury_risk(
             "rom_values": [round(v, 2) for v in rom_values],
             "delta_vs_earliest": round(rom_values[-1] - rom_values[0], 2),
             "range_pct_delta": round(abs(rom_values[-1] - rom_values[0]) / score_range if score_range > 0 else 0.0, 3),
+            "data_sufficient": joint_data_sufficient,
         }
 
-    data_sufficient = sessions_with_data >= 3
+    # data_sufficient = True only when ALL tracked injured joints have ≥3 sessions
+    if injured_joint_trend:
+        data_sufficient = all(
+            v.get("data_sufficient", False) for v in injured_joint_trend.values()
+        )
+    else:
+        data_sufficient = sessions_with_data >= 3
 
     # ── LLM call ──────────────────────────────────────────────────────────────
     joint_trend_text = json.dumps(injured_joint_trend, indent=2) if injured_joint_trend else "No per-joint ROM history available yet."
@@ -262,7 +279,8 @@ Output only valid JSON."""
 
     coverage_notes = []
     if not data_sufficient:
-        coverage_notes.append(f"only {sessions_with_data} session(s) with joint ROM data — trend unreliable")
+        insufficient = [j for j, v in injured_joint_trend.items() if not v.get("data_sufficient", False)]
+        coverage_notes.append(f"joints with <3 sessions of ROM data: {insufficient or ['all']} — trends unreliable")
     if not injured_joints:
         coverage_notes.append("injured_joints not in patient metadata — fell back to flagged joints")
 

@@ -23,6 +23,7 @@ class SessionFact:
     session_id: str
     created_at: datetime
     source_type: str               # "pt_session" | "exercise_session"
+    session_type: str              # "assessment" | "treatment" | "home_exercise_check"
     scores: dict                   # {fall_risk_score, reinjury_risk_score, pain_score, rom_score}
     injured_joint_rom: dict        # {joint_name: rom_value} extracted from pose artifact
     flagged_joints: list[str]
@@ -82,7 +83,7 @@ async def build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTi
         select(AgentArtifact)
         .where(
             AgentArtifact.patient_id == patient_id,
-            AgentArtifact.agent_name.in_(["pose_analysis_agent", "reinjury_risk_agent", "reporter_agent"]),
+            AgentArtifact.agent_name.in_(["intake_agent", "pose_analysis_agent", "reinjury_risk_agent", "reporter_agent"]),
         )
         .order_by(AgentArtifact.created_at.asc())
     )
@@ -120,6 +121,11 @@ async def build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTi
             "rom_score": score.rom_score if score else None,
         }
 
+        intake_art = artifacts_by_key.get((sid, "intake_agent"))
+        session_type = "treatment"
+        if intake_art:
+            session_type = intake_art.artifact_json.get("metrics", {}).get("session_type", "treatment")
+
         pose_art = artifacts_by_key.get((sid, "pose_analysis_agent"))
         injured_joint_rom: dict[str, float] = {}
         flagged_joints: list[str] = []
@@ -144,6 +150,7 @@ async def build_patient_timeline(patient_id: str, db: AsyncSession) -> PatientTi
             session_id=sid,
             created_at=session.started_at,
             source_type="exercise_session" if sid in exercise_linked_ids else "pt_session",
+            session_type=session_type,
             scores=scores,
             injured_joint_rom=injured_joint_rom,
             flagged_joints=flagged_joints,
@@ -175,6 +182,14 @@ def compute_salience(timeline: PatientTimeline) -> SalienceReport:
             salient_session_ids.append(sid)
         why_selected.setdefault(sid, []).append(reason)
 
+    # Assessment sessions are baseline anchors — mark them but exclude from delta calculations
+    for fact in timeline.sessions:
+        if fact.session_type == "assessment":
+            _add_salient(fact.session_id, "assessment session (baseline anchor — excluded from delta calculations)")
+
+    # Only non-assessment sessions feed the trend/delta analysis
+    trend_sessions = [f for f in timeline.sessions if f.session_type != "assessment"]
+
     # Build metric time series: {metric_name: [(session_id, value), ...]}
     metric_series: dict[str, list[tuple[str, float]]] = {
         "fall_risk_score": [],
@@ -182,15 +197,15 @@ def compute_salience(timeline: PatientTimeline) -> SalienceReport:
         "pain_score": [],
         "rom_score": [],
     }
-    for fact in timeline.sessions:
+    for fact in trend_sessions:
         for metric in metric_series:
             val = fact.scores.get(metric)
             if val is not None:
                 metric_series[metric].append((fact.session_id, val))
 
-    # Per-joint ROM series
+    # Per-joint ROM series (trend sessions only)
     joint_series: dict[str, list[tuple[str, float]]] = {}
-    for fact in timeline.sessions:
+    for fact in trend_sessions:
         for joint, rom_val in fact.injured_joint_rom.items():
             joint_series.setdefault(joint, []).append((fact.session_id, rom_val))
 

@@ -17,7 +17,13 @@ async def write_artifact(
     data_coverage: dict,
     db: AsyncSession,
 ) -> str:
-    """Persist an agent artifact.  Idempotent on (session_id, agent_name)."""
+    """Persist an agent artifact.
+
+    Idempotency rules:
+    - session-level (session_id provided): gate on (session_id, agent_name) — skip if exists.
+    - patient-level (session_id=None): gate on (patient_id, agent_name) — update in place if exists,
+      so patient-level agents (e.g. progress_agent) never accumulate duplicate rows.
+    """
     if session_id:
         existing = await db.execute(
             select(AgentArtifact).where(
@@ -27,6 +33,22 @@ async def write_artifact(
         )
         row = existing.scalars().first()
         if row:
+            return row.id
+    else:
+        existing = await db.execute(
+            select(AgentArtifact).where(
+                AgentArtifact.patient_id == patient_id,
+                AgentArtifact.agent_name == agent_name,
+                AgentArtifact.session_id.is_(None),
+            )
+        )
+        row = existing.scalars().first()
+        if row:
+            row.artifact_json = artifact_json
+            row.upstream_artifact_ids_json = upstream_artifact_ids
+            row.data_coverage_json = data_coverage
+            row.created_at = datetime.utcnow()
+            await db.flush()
             return row.id
 
     artifact_id = str(uuid.uuid4())

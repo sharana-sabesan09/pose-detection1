@@ -128,6 +128,7 @@ Output only valid JSON, no prose."""
                 "rehab_phase": rehab_phase,
                 "contraindications": contraindications,
                 "data_confidence": data_confidence,
+                "session_type": output.session_type,
             }
         },
         upstream_artifact_ids=[],

@@ -10,7 +10,7 @@ from uagents import Agent, Context
 from agents._client import openai_client as _client, OPENAI_MODEL as _MODEL
 from agents.hipaa import hipaa_wrap
 from agents.messages import FallRiskRequest, FallRiskResponse
-from db.models import SessionScore
+from db.models import Patient, SessionScore
 from rag.retriever import retrieve_clinical_context
 from schemas.session import FallRiskOutput, IntakeOutput, PoseAnalysisOutput
 from utils.artifacts import get_artifact_id, write_artifact
@@ -26,6 +26,15 @@ async def run_fall_risk(
     session_id: str,
     db: AsyncSession,
 ) -> FallRiskOutput:
+    # Read patient demographic risk fields
+    patient_result = await db.execute(select(Patient).where(Patient.id == patient_id))
+    patient = patient_result.scalars().first()
+    meta: dict = (patient.metadata_json or {}) if patient else {}
+    demographic_risk_score: float | None = meta.get("demographicRiskScore")
+    age: int | None = meta.get("age")
+    bmi: float | None = meta.get("bmi")
+    gender: str | None = meta.get("gender")
+
     rag_query = (
         f"fall risk assessment {' '.join(pose.flagged_joints)} "
         f"pain {json.dumps(intake.normalized_pain_scores)} "
@@ -51,7 +60,21 @@ async def run_fall_risk(
         intake_clinical.append(f"Contraindications: {', '.join(intake.contraindications)}")
     clinical_intake_block = "\n".join(intake_clinical) if intake_clinical else "No clinical context available."
 
-    prompt = f"""Patient clinical context:
+    demo_parts = []
+    if demographic_risk_score is not None:
+        demo_parts.append(f"Demographic risk score (mobile-computed): {demographic_risk_score:.1f}/100")
+    if age is not None:
+        demo_parts.append(f"Age: {age}")
+    if bmi is not None:
+        demo_parts.append(f"BMI: {bmi:.1f}")
+    if gender:
+        demo_parts.append(f"Gender: {gender}")
+    demographic_block = "\n".join(demo_parts) if demo_parts else "No demographic data available."
+
+    prompt = f"""Patient demographic profile:
+{demographic_block}
+
+Patient clinical context:
 {clinical_intake_block}
 
 Intake Data:
