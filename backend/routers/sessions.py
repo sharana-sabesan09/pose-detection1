@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -18,7 +18,6 @@ from fastapi.responses import PlainTextResponse
 from utils.voice_metadata import build_session_metadata_from_voice
 from fastapi.responses import StreamingResponse
 from schemas.artifact import ExerciseSessionArtifactResponse
-from datetime import timezone
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -151,6 +150,8 @@ async def store_exercise_result(
         reps_csv=body.repsCsv,
         frame_features_csv=body.frameFeaturesCsv,
         frames_csv=body.framesCsv,
+        calibration_batch_id=body.calibrationBatchId,
+        calibration_step=body.calibrationStep,
         linked_session_id=linked_session.id,
     )
     db.add(exercise_session)
@@ -227,6 +228,8 @@ async def store_exercise_result(
         numReps=exercise_session.num_reps,
         overallRating=body.summary.summary.overallRating,
         linkedSessionId=linked_session_id,
+        calibrationBatchId=exercise_session.calibration_batch_id,
+        calibrationStep=exercise_session.calibration_step,
     )
 
 
@@ -275,6 +278,41 @@ async def latest_landmark_frames_csv(
     if not frames:
         raise HTTPException(status_code=404, detail="no landmark frames stored for latest session")
     return _build_landmarks_csv_from_frames(frames, mode=exercise)
+
+
+@router.get("/calibration/frames.csv", response_class=PlainTextResponse)
+async def calibration_landmark_frames_csv(
+    patientId: str,
+    calibrationBatchId: str,
+    calibrationStep: int,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_jwt),
+):
+    if calibrationStep < 1 or calibrationStep > 4:
+        raise HTTPException(status_code=422, detail="calibrationStep must be 1..4")
+
+    result = await db.execute(
+        select(ExerciseSession)
+        .where(ExerciseSession.patient_id == patientId)
+        .where(ExerciseSession.calibration_batch_id == calibrationBatchId)
+        .where(ExerciseSession.calibration_step == calibrationStep)
+        .order_by(ExerciseSession.created_at.desc())
+        .limit(1)
+    )
+    ex = result.scalars().first()
+    if not ex or not ex.linked_session_id:
+        raise HTTPException(status_code=404, detail="calibration session not found")
+
+    frames_result = await db.execute(
+        select(PoseFrame)
+        .where(PoseFrame.session_id == ex.linked_session_id)
+        .where(PoseFrame.landmarks_json.isnot(None))
+        .order_by(PoseFrame.timestamp)
+    )
+    frames = frames_result.scalars().all()
+    if not frames:
+        raise HTTPException(status_code=404, detail="no landmark frames stored for calibration session")
+    return _build_landmarks_csv_from_frames(frames, mode=f"calibration_{calibrationStep}")
 
 
 @router.post(

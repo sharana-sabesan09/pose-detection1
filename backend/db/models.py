@@ -127,6 +127,12 @@ class ExerciseSession(Base):
     frames_csv = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    # Optional calibration protocol markers (mobile app).
+    # When both are set, `calibration_step` is expected to be 1–4 for the fixed
+    # filming sequence (left SLS, right SLS, left LSD, right LSD).
+    calibration_batch_id = Column(String(64), nullable=True)
+    calibration_step = Column(Integer, nullable=True)
+
     # When set, raw PoseFrame rows are stored against this Session so the
     # pose_analysis_agent can read them through the existing frames pipeline.
     linked_session_id = Column(String(36), ForeignKey("sessions.id"), nullable=True)
