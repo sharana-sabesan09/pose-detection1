@@ -221,6 +221,7 @@ export function computeFrameFeatures(
   raw: RawLandmarks,
   normalized: NormalizedLandmarks,
   prev?: FrameFeatures,
+  forceSide?: Side,
 ): FrameFeatures {
   // ── Side selection ────────────────────────────────────────────────────────
   const leftLeg  = legFor('left',  normalized);
@@ -228,22 +229,24 @@ export function computeFrameFeatures(
   const leftVis  = legVisibility(leftLeg);
   const rightVis = legVisibility(rightLeg);
 
-  // Foot height in normalised space (larger y = lower on screen = closer to floor).
-  // For a single-leg squat the lifted foot has SMALLER y; the standing foot has LARGER y.
-  // We want the STANDING leg — the one whose foot is lower on screen (larger y).
-  const leftFootY  = footHeight(leftLeg);
-  const rightFootY = footHeight(rightLeg);
-  // footHeightDiff > 0 → right foot is lower on screen (standing) → dominant = right
-  // footHeightDiff < 0 → left foot is lower on screen (standing)  → dominant = left
-  const footHeightDiff = rightFootY - leftFootY;
-
   let dominantSide: Side;
-  if (Math.abs(footHeightDiff) > 0.1) {
-    // Unilateral: pick the leg whose foot is on the floor (larger y = lower on screen).
-    dominantSide = footHeightDiff > 0 ? 'right' : 'left';
+  if (forceSide) {
+    // Caller knows which leg is the working leg (e.g. 'rightSls' → 'right').
+    // Skip the auto-pick entirely — saves us from misclassifying when both
+    // feet are on the floor (chair-supported squats, step-down setup phase).
+    dominantSide = forceSide;
   } else {
-    // Bilateral or neutral: use visibility
-    dominantSide = leftVis >= rightVis ? 'left' : 'right';
+    // Foot height in normalised space (larger y = lower on screen).
+    // For a single-leg squat the lifted foot has SMALLER y; the standing foot has LARGER y.
+    const leftFootY  = footHeight(leftLeg);
+    const rightFootY = footHeight(rightLeg);
+    const footHeightDiff = rightFootY - leftFootY;
+
+    if (Math.abs(footHeightDiff) > 0.1) {
+      dominantSide = footHeightDiff > 0 ? 'right' : 'left';
+    } else {
+      dominantSide = leftVis >= rightVis ? 'left' : 'right';
+    }
   }
 
   const dominantLeg = dominantSide === 'left' ? leftLeg : rightLeg;

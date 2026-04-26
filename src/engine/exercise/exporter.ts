@@ -21,7 +21,15 @@
  */
 
 import { Share } from 'react-native';
-import { FrameFeatures, RepFeatures, SessionSummary } from './types';
+import {
+  ExerciseType,
+  FrameFeatures,
+  InjuredJointInfo,
+  MultiExerciseSession,
+  RepFeatures,
+  SessionExerciseEntry,
+  SessionSummary,
+} from './types';
 import { buildFrameDebugCsv, buildRepsCsv } from './csvWriter';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,6 +101,118 @@ export function buildExportPayload(
     repsCsv:    buildRepsCsv(summary.reps),
     frameFeaturesCsv: buildFrameDebugCsv(frameFeatures),
     patientId: patientId ?? null,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Multi-exercise session
+//
+// One recording session may produce multiple exercise entries (e.g. left+right
+// SLS, left+right step-down, walking). The wrapper preserves each entry's
+// shape exactly so anything that previously consumed the single-exercise JSON
+// can still read individual entries.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a SessionExerciseEntry from a finalised SessionSummary plus its
+ * recording window. This is the per-exercise sub-document that gets
+ * appended to MultiExerciseSession.exercises[].
+ */
+export function buildSessionExerciseEntry(
+  summary: SessionSummary,
+  startedAtMs: number,
+  endedAtMs: number,
+): SessionExerciseEntry {
+  return {
+    exercise:    summary.exercise,
+    startedAtMs,
+    endedAtMs,
+    durationMs:  Math.max(0, endedAtMs - startedAtMs),
+    numReps:     summary.summary.numReps,
+    summary,
+  };
+}
+
+/**
+ * Compute a ROM score per rep-based exercise: mean romRatio across that
+ * exercise's reps. Walking is excluded — it doesn't measure joint ROM.
+ * Rep-based exercises that ran but produced no reps map to null so the
+ * field still exists for longitudinal tracking continuity.
+ */
+function computeRomByExercise(
+  entries: SessionExerciseEntry[],
+): Partial<Record<ExerciseType, number | null>> {
+  const out: Partial<Record<ExerciseType, number | null>> = {};
+  for (const e of entries) {
+    if (e.exercise === 'walking') continue;
+    const reps = e.summary.reps;
+    if (reps.length === 0) {
+      out[e.exercise as ExerciseType] = null;
+      continue;
+    }
+    const sum = reps.reduce((s, r) => s + r.features.romRatio, 0);
+    out[e.exercise as ExerciseType] = sum / reps.length;
+  }
+  return out;
+}
+
+export function buildMultiExerciseSession(
+  sessionId: string,
+  startedAtMs: number,
+  endedAtMs: number,
+  patientId: string,
+  injuredJointName: string,
+  entries: SessionExerciseEntry[],
+): MultiExerciseSession {
+  const injuredJoint: InjuredJointInfo = {
+    name: injuredJointName,
+    romByExercise: computeRomByExercise(entries),
+  };
+  return {
+    sessionId,
+    startedAtMs,
+    endedAtMs,
+    durationMs: Math.max(0, endedAtMs - startedAtMs),
+    patient: { patientId, injuredJoint },
+    exercises: entries,
+  };
+}
+
+export function buildMultiExerciseJson(session: MultiExerciseSession): string {
+  return JSON.stringify(session, null, 2);
+}
+
+export interface MultiSessionExportPayload {
+  session:          MultiExerciseSession;
+  /** All exercise reps concatenated, JSONL form. Convenience for analysis tools. */
+  repsJsonl:        string;
+  /** All exercise reps concatenated, CSV form. */
+  repsCsv:          string;
+  /** Per-frame features CSV, all exercises concatenated with an exercise column. */
+  frameFeaturesCsv: string;
+}
+
+export function buildMultiSessionExportPayload(
+  session: MultiExerciseSession,
+  framesByExercise: { exercise: string; frames: FrameFeatures[] }[],
+): MultiSessionExportPayload {
+  const allReps: RepFeatures[] = session.exercises.flatMap(e => e.summary.reps);
+  const repsJsonl = buildRepsJsonl(allReps);
+  const repsCsv   = buildRepsCsv(allReps);
+
+  // Frame features CSV: emit one block per exercise. Each block carries its
+  // own header line so downstream tools can split by header.
+  const frameBlocks = framesByExercise
+    .map(({ exercise, frames }) =>
+      `# exercise: ${exercise}\n` + buildFrameDebugCsv(frames),
+    )
+    .join('\n');
+
+  return {
+    session,
+    repsJsonl,
+    repsCsv,
+    frameFeaturesCsv: frameBlocks,
   };
 }
 
@@ -332,6 +452,131 @@ export async function shareSessionViaSheet(
     const result = await Share.share(
       { message, title: `sentinel-${payload.sessionId}.json` },
       { subject: `Sentinel session ${payload.sessionId}` },
+    );
+    return { ok: result.action !== Share.dismissedAction, action: result.action };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Multi-exercise session POST + share
+//
+// TODO (backend): the existing /sessions/exercise-result route was built for
+// the single-SessionSummary payload. The new multi-session payload below
+// nests an `exercises` array; the backend needs a corresponding handler that
+// fans out to the exercise_sessions / rep_analyses tables once per entry,
+// AND persists the patient.injuredJoint.romByExercise field for longitudinal
+// tracking. Until that ships, this function will receive 4xx from the route.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function postMultiSessionToBackend(
+  baseUrl: string | null | undefined,
+  payload: MultiSessionExportPayload,
+  timeoutMs = 20000,
+): Promise<BackendExportResult> {
+  if (!baseUrl) return { ok: false, error: 'no backend URL configured' };
+
+  const url = baseUrl.replace(/\/+$/, '') + '/sessions/exercise-result';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const token = await getBackendToken(baseUrl, timeoutMs);
+    const res = await fetch(url, {
+      method:  'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        sessionId:        payload.session.sessionId,
+        startedAtMs:      payload.session.startedAtMs,
+        endedAtMs:        payload.session.endedAtMs,
+        durationMs:       payload.session.durationMs,
+        patient:          payload.session.patient,
+        exercises:        payload.session.exercises,
+        repsCsv:          payload.repsCsv,
+        frameFeaturesCsv: payload.frameFeaturesCsv,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      const raw = await res.text().catch(() => '');
+      const trimmed = raw.trim();
+      let detail = trimmed;
+      try {
+        const parsed = trimmed ? JSON.parse(trimmed) : null;
+        if (parsed?.detail) detail = String(parsed.detail);
+      } catch { /* keep raw */ }
+      return {
+        ok: false,
+        status: res.status,
+        detail: detail || undefined,
+        error: detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`,
+      };
+    }
+    const data = await res.json().catch(() => ({}));
+    return { ok: true, status: res.status, id: data?.id, linkedSessionId: data?.linkedSessionId };
+  } catch (e) {
+    clearTimeout(timer);
+    cachedAccessToken = null;
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+export async function postMultiSessionToLocalExports(
+  baseUrl: string | null | undefined,
+  payload: MultiSessionExportPayload,
+  framesCsv?: string,
+  timeoutMs = 20000,
+): Promise<BackendExportResult> {
+  if (!baseUrl) return { ok: false, error: 'no local exports URL configured' };
+
+  const url = baseUrl.replace(/\/+$/, '') + '/exports/session';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id:   payload.session.sessionId,
+        summary_json: buildMultiExerciseJson(payload.session),
+        reps_csv:     payload.repsCsv,
+        reps_jsonl:   payload.repsJsonl,
+        frames_csv:   framesCsv ?? payload.frameFeaturesCsv,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      const raw = await res.text().catch(() => '');
+      return {
+        ok: false,
+        status: res.status,
+        detail: raw || undefined,
+        error: raw ? `HTTP ${res.status}: ${raw}` : `HTTP ${res.status}`,
+      };
+    }
+    const data = await res.json().catch(() => ({}));
+    return { ok: true, status: res.status, writtenTo: data?.written_to, files: data?.files };
+  } catch (e) {
+    clearTimeout(timer);
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+export async function shareMultiSessionViaSheet(
+  payload: MultiSessionExportPayload,
+): Promise<{ ok: boolean; action?: string; error?: string }> {
+  const message = buildMultiExerciseJson(payload.session);
+  try {
+    const result = await Share.share(
+      { message, title: `sentinel-${payload.session.sessionId}.json` },
+      { subject: `Sentinel session ${payload.session.sessionId}` },
     );
     return { ok: result.action !== Share.dismissedAction, action: result.action };
   } catch (e) {

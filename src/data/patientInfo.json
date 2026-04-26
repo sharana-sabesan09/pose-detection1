@@ -1,0 +1,11 @@
+{
+  "patientId": "demo-pt-001",
+  "age": 34,
+  "gender": "female",
+  "heightCm": 168,
+  "weightKg": 64,
+  "bmi": 22.7,
+  "demographicRiskScore": 18,
+  "curr_program": ["leftSls", "rightSls", "leftLsd", "rightLsd", "walking"],
+  "injuredjoint": "right_knee"
+}

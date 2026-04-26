@@ -23,6 +23,7 @@ export function aggregateRepFromFrames(
   repId:   number,
   range:   RepRange,
   plugin:  ExercisePlugin,
+  side?:   Side,
 ): RepFeatures | null {
   if (frames.length < 3) return null;
 
@@ -31,9 +32,16 @@ export function aggregateRepFromFrames(
   const bottomRelIdx = Math.min(range.bottomIdx - range.startIdx, frames.length - 1);
   const bottomFrame  = frames[bottomRelIdx];
 
-  // Side: majority vote across all frames in the rep.
-  const leftCount = frames.filter(f => f.dominantSide === 'left').length;
-  const side: Side = leftCount >= frames.length / 2 ? 'left' : 'right';
+  // If the caller supplies a side (every new pipeline does — it comes from
+  // the ExerciseType), use it directly. Fall back to majority-vote for legacy
+  // callers that don't know the side ahead of time.
+  let resolvedSide: Side;
+  if (side) {
+    resolvedSide = side;
+  } else {
+    const leftCount = frames.filter(f => f.dominantSide === 'left').length;
+    resolvedSide = leftCount >= frames.length / 2 ? 'left' : 'right';
+  }
 
   let kneeFlexionDeg   = -Infinity;
   let fppaPeak         = -Infinity;
@@ -94,7 +102,7 @@ export function aggregateRepFromFrames(
 
   return {
     repId,
-    side,
+    side: resolvedSide,
     timing: {
       startFrame:  range.startIdx,
       bottomFrame: range.bottomIdx,

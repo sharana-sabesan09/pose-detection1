@@ -1,17 +1,26 @@
 /**
  * src/screens/SessionScreen.tsx — LIVE SESSION (TAB 1)
  *
- * DATA PIPELINE:
- *   MediaPipe WebView → postMessage → onMessage
- *     → PoseDetectors → aggregateScores → ScoreDashboard (live scores)
- *     → recordingBuffer (when recording) → analyzeRecording → Dashboard
+ * NEW MULTI-EXERCISE FLOW (replaces single 60s recording):
  *
- * RECORDING FLOW:
- *   User taps "Record" → pose frames buffered for up to 60s
- *   → timer reaches 0 OR user taps "Stop"
- *   → analyzeRecording() processes full dataset
- *   → result saved to AsyncStorage
- *   → navigates to Results tab automatically
+ *   On mount → load patient.curr_program (list of prescribed exercises).
+ *   User taps "Start Session" → run each exercise back-to-back:
+ *
+ *     For each exercise in curr_program:
+ *       1. AWAITING — show "Next: <label>. Start when ready" + Start button
+ *       2. RECORDING — fixed 30s, fresh ExercisePipeline per exercise
+ *       3. On timer end (or stop) → finalize, buffer the entry, advance
+ *
+ *     After last exercise:
+ *       4. ANALYZING — build MultiExerciseSession, POST to backend, share
+ *       5. Navigate to Results
+ *
+ *   Live ScoreDashboard updates throughout from PoseDetectors. Mode is mapped
+ *   from the current exercise (walking → 'walking', else → 'standing') so the
+ *   dimming logic in ScoreDashboard still works.
+ *
+ * PATIENT DATA SOURCE: dummy JSON via loadPatientInfo() — see
+ * src/engine/patientInfo.ts (TODO marker there for the SQL swap).
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
@@ -37,11 +46,16 @@ import {
 } from '../engine/analyzeRecording';
 import { ExercisePipeline } from '../engine/exercise/pipeline';
 import {
-  buildExportPayload,
-  buildSessionJson,
-  postSessionToBackend,
-  postSessionToLocalExports,
-  shareSessionViaSheet,
+  ExerciseType,
+  SessionExerciseEntry,
+} from '../engine/exercise/types';
+import {
+  buildSessionExerciseEntry,
+  buildMultiExerciseSession,
+  buildMultiSessionExportPayload,
+  postMultiSessionToBackend,
+  postMultiSessionToLocalExports,
+  shareMultiSessionViaSheet,
 } from '../engine/exercise/exporter';
 import { buildLandmarkCsv } from '../engine/csvLogger';
 import { BACKEND_URL, LOCAL_EXPORTS_URL } from '../constants';
@@ -49,11 +63,14 @@ import ScoreDashboard from '../components/ScoreDashboard';
 import { POSE_HTML } from '../engine/poseHtml';
 import { loadStoredProfile, saveStoredProfile } from '../engine/profileStorage';
 import { upsertPatientProfile } from '../engine/backendClient';
+import { loadPatientInfo, PatientInfo } from '../engine/patientInfo';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS + TYPES
 // ─────────────────────────────────────────────────────────────────────────────
-const MAX_RECORD_SEC = 60;
+const EXERCISE_DURATION_SEC = 30;
+
+type SessionState = 'idle' | 'awaiting' | 'recording' | 'analyzing' | 'done';
 
 type NavProp = CompositeNavigationProp<
   BottomTabNavigationProp<MainTabParamList, 'Live'>,
@@ -68,6 +85,18 @@ const DEFAULT_SCORES: RiskScores = {
   overallFallRisk:  50,
 };
 
+const EXERCISE_LABELS: Record<ExerciseType, string> = {
+  leftSls:  'Left Single-Leg Squat',
+  rightSls: 'Right Single-Leg Squat',
+  leftLsd:  'Left Lateral Step-Down',
+  rightLsd: 'Right Lateral Step-Down',
+  walking:  'Walking',
+};
+
+function modeForExercise(e: ExerciseType): SessionMode {
+  return e === 'walking' ? 'walking' : 'standing';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,46 +104,59 @@ const DEFAULT_SCORES: RiskScores = {
 export default function SessionScreen() {
   const navigation = useNavigation<NavProp>();
 
-  const [mode,        setMode]        = useState<SessionMode>('standing');
   const [scores,      setScores]      = useState<RiskScores>(DEFAULT_SCORES);
   const [initialized, setInitialized] = useState(false);
   const [webViewActive, setWebViewActive] = useState(false);
 
-  // ── Recording state ───────────────────────────────────────────────────────
-  const [recordState, setRecordState]   = useState<'idle' | 'recording' | 'analyzing'>('idle');
-  const [timeLeft,    setTimeLeft]      = useState(MAX_RECORD_SEC);
+  // ── Session state ─────────────────────────────────────────────────────────
+  const [sessionState, setSessionState] = useState<SessionState>('idle');
+  const [patient,      setPatient]      = useState<PatientInfo | null>(null);
+  const [exerciseIdx,  setExerciseIdx]  = useState(0);
+  const [timeLeft,     setTimeLeft]     = useState(EXERCISE_DURATION_SEC);
 
-  const recordingFrames = useRef<RecordedFrame[]>([]);
-  const webViewRef      = useRef<WebView>(null);
+  // Mutable per-recording state lives in refs to avoid the message handler
+  // re-binding on every render.
+  const sessionStartedAtRef  = useRef<number>(0);
+  const sessionIdRef         = useRef<string>('');
+  const exerciseStartedAtRef = useRef<number>(0);
+  const completedEntriesRef  = useRef<SessionExerciseEntry[]>([]);
+  const framesByExerciseRef  = useRef<{ exercise: string; frames: ReturnType<ExercisePipeline['getFrameBuffer']> }[]>([]);
+  const walkingRecordedFramesRef = useRef<RecordedFrame[]>([]);  // for analyzeRecording dashboard data
+
+  const pipelineRef     = useRef<ExercisePipeline | null>(null);
   const profileRef      = useRef<UserProfile | null>(null);
   const detectorsRef    = useRef(new PoseDetectors());
-  const recordStateRef  = useRef(recordState);
-  // Exercise pipeline: instantiated fresh on each recording start so reps
-  // detected in the previous run don't bleed into the next.
-  const pipelineRef        = useRef<ExercisePipeline | null>(null);
-  const recordStartedAtRef = useRef<number>(0);
+  const sessionStateRef = useRef(sessionState);
+  const webViewRef      = useRef<WebView>(null);
 
-  useEffect(() => { recordStateRef.current = recordState; }, [recordState]);
+  useEffect(() => { sessionStateRef.current = sessionState; }, [sessionState]);
 
-  // ── Load user profile once ────────────────────────────────────────────────
+  const currentExercise: ExerciseType | null =
+    patient && exerciseIdx < patient.curr_program.length
+      ? patient.curr_program[exerciseIdx]
+      : null;
+
+  // ── Load profile + patient info on mount ─────────────────────────────────
   useEffect(() => {
     loadStoredProfile().then(async profile => {
-      if (!profile) return;
-      profileRef.current = profile;
-      if (!profile.backendProfileSyncedAt) {
-        try {
-          await upsertPatientProfile(profile);
-          const syncedProfile: UserProfile = {
-            ...profile,
-            backendProfileSyncedAt: new Date().toISOString(),
-          };
-          profileRef.current = syncedProfile;
-          await saveStoredProfile(syncedProfile);
-        } catch (e) {
-          console.warn('[SessionScreen] patient sync failed:', (e as Error).message);
+      if (profile) {
+        profileRef.current = profile;
+        if (!profile.backendProfileSyncedAt) {
+          try {
+            await upsertPatientProfile(profile);
+            const synced: UserProfile = { ...profile, backendProfileSyncedAt: new Date().toISOString() };
+            profileRef.current = synced;
+            await saveStoredProfile(synced);
+          } catch (e) {
+            console.warn('[SessionScreen] patient sync failed:', (e as Error).message);
+          }
         }
       }
     });
+
+    loadPatientInfo()
+      .then(setPatient)
+      .catch(e => console.warn('[SessionScreen] patient info load failed:', e));
   }, []);
 
   // ── WebView on/off with screen focus ──────────────────────────────────────
@@ -122,35 +164,27 @@ export default function SessionScreen() {
     useCallback(() => {
       setWebViewActive(true);
       return () => setWebViewActive(false);
-    }, [])
+    }, []),
   );
 
-  // ── Countdown timer while recording ──────────────────────────────────────
+  // ── Countdown timer while recording ───────────────────────────────────────
   useEffect(() => {
-    if (recordState !== 'recording') return;
-
-    setTimeLeft(MAX_RECORD_SEC);
+    if (sessionState !== 'recording') return;
+    setTimeLeft(EXERCISE_DURATION_SEC);
 
     const interval = setInterval(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
           clearInterval(interval);
-          finishRecording();
+          finishCurrentExercise();
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
-
     return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recordState]);
-
-  // ── Mode change: reset detector buffers ──────────────────────────────────
-  const handleModeChange = useCallback((newMode: SessionMode) => {
-    detectorsRef.current.reset();
-    setMode(newMode);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionState, exerciseIdx]);
 
   // ── Receive landmarks from MediaPipe WebView ──────────────────────────────
   const onMessage = useCallback((event: WebViewMessageEvent) => {
@@ -159,114 +193,156 @@ export default function SessionScreen() {
       if (msg.type !== 'pose' || !Array.isArray(msg.landmarks)) return;
 
       const pose = msg.landmarks as PoseFrame;
+      const ex   = currentExercise;
 
-      if (recordStateRef.current === 'recording') {
+      if (sessionStateRef.current === 'recording' && pipelineRef.current) {
         const t = Date.now();
-        recordingFrames.current.push({ t, pose });
-        // Rep detection is post-hoc — onFrame only collects frames.
-        // Reps are detected in finalize() after the recording ends.
-        pipelineRef.current?.onFrame(t, pose);
+        pipelineRef.current.onFrame(t, pose);
+        if (ex === 'walking') walkingRecordedFramesRef.current.push({ t, pose });
       }
 
-      detectorsRef.current.update(pose, mode);
+      const liveMode: SessionMode = ex ? modeForExercise(ex) : 'standing';
+      detectorsRef.current.update(pose, liveMode);
       const demographicRisk = profileRef.current?.demographicRiskScore ?? 0;
       setScores(aggregateScores(detectorsRef.current.measurements, demographicRisk));
       if (!initialized) setInitialized(true);
 
     } catch { /* ignore malformed messages */ }
-  }, [mode, initialized]);
+  }, [currentExercise, initialized]);
 
-  // ── Start recording ───────────────────────────────────────────────────────
-  const startRecording = useCallback(() => {
-    recordingFrames.current = [];
-    recordStartedAtRef.current = Date.now();
-    pipelineRef.current = new ExercisePipeline('squat');
-    setRecordState('recording');
-  }, []);
+  // ── Session lifecycle ─────────────────────────────────────────────────────
+  const startSession = useCallback(() => {
+    if (!patient || patient.curr_program.length === 0) {
+      Alert.alert('No exercises prescribed', 'This patient has no curr_program entries.');
+      return;
+    }
+    sessionIdRef.current = new Date().toISOString();
+    sessionStartedAtRef.current = Date.now();
+    completedEntriesRef.current = [];
+    framesByExerciseRef.current = [];
+    walkingRecordedFramesRef.current = [];
+    setExerciseIdx(0);
+    setSessionState('awaiting');
+  }, [patient]);
 
-  // ── Finish recording: analyze + save + export (backend POST + share) ──────
-  const finishRecording = useCallback(async () => {
-    setRecordState('analyzing');
+  const startCurrentExercise = useCallback(() => {
+    if (!currentExercise) return;
+    exerciseStartedAtRef.current = Date.now();
+    pipelineRef.current = new ExercisePipeline(currentExercise);
+    detectorsRef.current.reset(); // fresh per-exercise live windows
+    setSessionState('recording');
+  }, [currentExercise]);
 
-    const frames = recordingFrames.current;
-    const demographicRisk = profileRef.current?.demographicRiskScore ?? 0;
-
-    const result = analyzeRecording(frames, demographicRisk);
-    await saveAnalysis(result);
-
-    // Finalize the exercise pipeline and export the full session schema.
+  const finishCurrentExercise = useCallback(() => {
+    const ex = currentExercise;
     const pipe = pipelineRef.current;
-    if (pipe) {
-      try {
-        const session   = pipe.finalize();
-        const startedAt = recordStartedAtRef.current || (frames[0]?.t ?? Date.now());
-        const endedAt   = frames[frames.length - 1]?.t ?? Date.now();
-        const frameFeatures = pipe.getFrameBuffer();
-        const payload = buildExportPayload(
-          result.id,
-          startedAt,
-          endedAt,
-          session,
-          frameFeatures,
-          profileRef.current?.patientId ?? null,
-        );
+    if (!ex || !pipe) return;
 
-        console.log(`[export] ${session.reps.length} rep(s):`, JSON.stringify(session.summary));
+    const startedAt = exerciseStartedAtRef.current;
+    const endedAt   = Date.now();
+    try {
+      const summary = pipe.finalize();
+      completedEntriesRef.current.push(buildSessionExerciseEntry(summary, startedAt, endedAt));
+      framesByExerciseRef.current.push({ exercise: ex, frames: pipe.getFrameBuffer() });
+      console.log(`[session] ${ex}: ${summary.reps.length} reps,`, JSON.stringify(summary.summary));
+    } catch (e) {
+      console.error('[session] finalize crash:', e);
+    }
+    pipelineRef.current = null;
 
-        // ── 1. AsyncStorage backup — always succeeds, no network needed ──────
-        // Guarantees the schema is never lost even if the Metro POST fails.
-        const sessionJson = buildSessionJson(result.id, startedAt, endedAt, session);
-        await AsyncStorage.setItem(`sentinel_schema_${result.id}`, sessionJson);
+    const nextIdx = exerciseIdx + 1;
+    if (patient && nextIdx < patient.curr_program.length) {
+      setExerciseIdx(nextIdx);
+      setSessionState('awaiting');
+    } else {
+      finalizeSession();
+    }
+  }, [currentExercise, exerciseIdx, patient]);
 
-        // ── 2. Backend POST to Railway /sessions/exercise-result ────────────
-        const framesCsv = buildLandmarkCsv(frames, mode);
+  const finalizeSession = useCallback(async () => {
+    setSessionState('analyzing');
 
-        // 2a) MUST-HAVE local artifacts in root /exports via local backend.
-        const localExportRes = await postSessionToLocalExports(LOCAL_EXPORTS_URL, payload, framesCsv);
-        if (localExportRes.ok) {
-          console.log('[export] local artifacts saved:', localExportRes.writtenTo, localExportRes.files);
-        } else {
-          console.warn('[export] local artifact write failed:', localExportRes.error);
-        }
+    const sessionId   = sessionIdRef.current;
+    const startedAtMs = sessionStartedAtRef.current;
+    const endedAtMs   = Date.now();
+    const entries     = completedEntriesRef.current;
+    const patientId   = profileRef.current?.patientId ?? patient?.patientId ?? 'unknown';
+    const injuredJointName = patient?.injuredjoint ?? 'unknown';
 
-        // 2b) Railway/Postgres ingest (non-fatal if it fails).
-        const backendRes = await postSessionToBackend(BACKEND_URL, payload);
-        if (backendRes.ok) {
-          console.log('[export] session stored:', backendRes.id, backendRes.linkedSessionId);
-          if (localExportRes.ok && localExportRes.writtenTo) {
-            Alert.alert(
-              'Session exported',
-              `Railway upload succeeded.\nLocal files saved at:\n${localExportRes.writtenTo}`,
-            );
-          } else {
-            Alert.alert('Session exported', 'Uploaded successfully to backend.');
-          }
-        } else {
-          const detail = backendRes.detail ?? backendRes.error ?? 'Unknown backend error';
-          console.error('[export] backend POST failed:', detail);
-          // Non-fatal: report error, continue session flow, and offer manual share.
-          if (localExportRes.ok && localExportRes.writtenTo) {
-            Alert.alert(
-              'Railway upload failed (non-fatal)',
-              `${detail}\n\nLocal export is saved at:\n${localExportRes.writtenTo}`,
-            );
-          } else {
-            Alert.alert('Backend export failed', detail);
-          }
-          await shareSessionViaSheet(payload);
-        }
+    const multiSession = buildMultiExerciseSession(
+      sessionId, startedAtMs, endedAtMs,
+      patientId, injuredJointName,
+      entries,
+    );
 
-      } catch (e) {
-        console.error('[export] crash:', e);
-        Alert.alert('Export error', String((e as Error).message));
-      }
+    const payload = buildMultiSessionExportPayload(multiSession, framesByExerciseRef.current);
+
+    // Live dashboard (Results tab) — only meaningful for walking. Skip if absent.
+    if (walkingRecordedFramesRef.current.length > 0) {
+      const demographicRisk = profileRef.current?.demographicRiskScore ?? 0;
+      const result = analyzeRecording(walkingRecordedFramesRef.current, demographicRisk);
+      await saveAnalysis({ ...result, id: sessionId });
     }
 
-    setRecordState('idle');
-    recordingFrames.current = [];
-    pipelineRef.current = null;
+    try {
+      // 1. AsyncStorage backup — never lose the schema
+      await AsyncStorage.setItem(`sentinel_schema_${sessionId}`, JSON.stringify(multiSession));
+
+      // 2. Local /exports dev artifact
+      const framesCsv = buildLandmarkCsv(
+        // analyzeRecording-style flat frames CSV across the whole session
+        // (best-effort: union of every recorded walking frame; non-walking uses
+        // pipeline frame features CSV that's already in the payload).
+        walkingRecordedFramesRef.current,
+        'walking',
+      );
+      const localRes = await postMultiSessionToLocalExports(LOCAL_EXPORTS_URL, payload, framesCsv);
+      if (localRes.ok) {
+        console.log('[export] local artifacts saved:', localRes.writtenTo, localRes.files);
+      } else {
+        console.warn('[export] local artifact write failed:', localRes.error);
+      }
+
+      // 3. Backend POST — see TODO in exporter for matching backend route work
+      const backendRes = await postMultiSessionToBackend(BACKEND_URL, payload);
+      if (backendRes.ok) {
+        Alert.alert(
+          'Session exported',
+          localRes.ok && localRes.writtenTo
+            ? `Backend upload succeeded.\nLocal files saved at:\n${localRes.writtenTo}`
+            : 'Uploaded successfully to backend.',
+        );
+      } else {
+        const detail = backendRes.detail ?? backendRes.error ?? 'Unknown backend error';
+        console.error('[export] backend POST failed:', detail);
+        if (localRes.ok && localRes.writtenTo) {
+          Alert.alert('Backend upload failed (non-fatal)', `${detail}\n\nLocal: ${localRes.writtenTo}`);
+        } else {
+          Alert.alert('Backend export failed', detail);
+        }
+        await shareMultiSessionViaSheet(payload);
+      }
+    } catch (e) {
+      console.error('[export] crash:', e);
+      Alert.alert('Export error', String((e as Error).message));
+    }
+
+    setSessionState('done');
     navigation.navigate('Results');
-  }, [navigation, mode]);
+  }, [navigation, patient]);
+
+  const stopSessionEarly = useCallback(() => {
+    Alert.alert('Stop session?', 'Discards remaining exercises and exports what you have.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Stop', style: 'destructive',
+        onPress: () => {
+          if (pipelineRef.current) finishCurrentExercise();
+          else finalizeSession();
+        },
+      },
+    ]);
+  }, [finishCurrentExercise, finalizeSession]);
 
   // ── Reset profile ─────────────────────────────────────────────────────────
   const handleReset = () => {
@@ -286,10 +362,10 @@ export default function SessionScreen() {
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
 
+  const liveMode: SessionMode = currentExercise ? modeForExercise(currentExercise) : 'standing';
+
   return (
     <View style={styles.root}>
-
-      {/* ── FULL-SCREEN MEDIAPIPE WEBVIEW ─────────────────────────────── */}
       {webViewActive && (
         <WebView
           ref={webViewRef}
@@ -305,10 +381,7 @@ export default function SessionScreen() {
         />
       )}
 
-      {/* ── RN OVERLAY ────────────────────────────────────────────────── */}
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
-
-        {/* ── TOP BAR ──────────────────────────────────────────────────── */}
         <View style={styles.topBar}>
           <Text style={styles.title}>SENTINEL</Text>
           <StatusPill ready={initialized} />
@@ -319,50 +392,71 @@ export default function SessionScreen() {
 
         <View style={{ flex: 1 }} pointerEvents="none" />
 
-        {/* ── BOTTOM PANEL ─────────────────────────────────────────────── */}
         <View pointerEvents="auto">
-          <ScoreDashboard scores={scores} mode={mode} initialized={initialized} />
-          <RecordButton
-            state={recordState}
+          <ScoreDashboard scores={scores} mode={liveMode} initialized={initialized} />
+          <SessionControls
+            state={sessionState}
+            patient={patient}
+            currentExercise={currentExercise}
+            exerciseIdx={exerciseIdx}
             timeLeft={timeLeft}
-            onStart={startRecording}
-            onStop={finishRecording}
+            onStartSession={startSession}
+            onStartExercise={startCurrentExercise}
+            onStop={stopSessionEarly}
           />
-          <ModeSelector mode={mode} onChange={handleModeChange} />
         </View>
-
       </SafeAreaView>
     </View>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RECORD BUTTON
+// SESSION CONTROLS
 // ─────────────────────────────────────────────────────────────────────────────
 
-function RecordButton({
-  state, timeLeft, onStart, onStop,
+function SessionControls({
+  state, patient, currentExercise, exerciseIdx, timeLeft,
+  onStartSession, onStartExercise, onStop,
 }: {
-  state:    'idle' | 'recording' | 'analyzing';
-  timeLeft: number;
-  onStart:  () => void;
-  onStop:   () => void;
+  state:           SessionState;
+  patient:         PatientInfo | null;
+  currentExercise: ExerciseType | null;
+  exerciseIdx:     number;
+  timeLeft:        number;
+  onStartSession:  () => void;
+  onStartExercise: () => void;
+  onStop:          () => void;
 }) {
   if (state === 'analyzing') {
     return (
-      <View style={styles.recordBar}>
-        <Text style={styles.analyzingText}>Analyzing recording…</Text>
+      <View style={styles.controlBar}>
+        <Text style={styles.analyzingText}>Analyzing session…</Text>
       </View>
     );
   }
 
-  if (state === 'recording') {
+  if (state === 'done') {
     return (
-      <View style={styles.recordBar}>
+      <View style={styles.controlBar}>
+        <Text style={styles.analyzingText}>Done.</Text>
+      </View>
+    );
+  }
+
+  if (state === 'recording' && currentExercise) {
+    return (
+      <View style={styles.controlBar}>
         <View style={styles.countdownBadge}>
           <Text style={styles.countdownText}>{timeLeft}s</Text>
         </View>
-        <Text style={styles.recordingLabel}>Recording — stay in frame</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.recordingLabel}>Recording: {EXERCISE_LABELS[currentExercise]}</Text>
+          {patient && (
+            <Text style={styles.subtle}>
+              {exerciseIdx + 1} of {patient.curr_program.length}
+            </Text>
+          )}
+        </View>
         <TouchableOpacity style={styles.stopBtn} onPress={onStop}>
           <Text style={styles.stopBtnText}>■ Stop</Text>
         </TouchableOpacity>
@@ -370,17 +464,41 @@ function RecordButton({
     );
   }
 
+  if (state === 'awaiting' && currentExercise && patient) {
+    return (
+      <View style={styles.promptBar}>
+        <Text style={styles.subtle}>
+          Next ({exerciseIdx + 1}/{patient.curr_program.length})
+        </Text>
+        <Text style={styles.promptTitle}>{EXERCISE_LABELS[currentExercise]}</Text>
+        <Text style={styles.subtle}>Get into position. 30s recording.</Text>
+        <TouchableOpacity style={styles.startBtn} onPress={onStartExercise}>
+          <Text style={styles.startBtnText}>⬤  Start</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // idle
+  if (!patient) {
+    return (
+      <View style={styles.controlBar}>
+        <Text style={styles.subtle}>Loading patient info…</Text>
+      </View>
+    );
+  }
   return (
-    <View style={styles.recordBar}>
-      <TouchableOpacity style={styles.recordBtn} onPress={onStart}>
-        <Text style={styles.recordBtnText}>⬤  Record 60s Analysis</Text>
+    <View style={styles.promptBar}>
+      <Text style={styles.subtle}>Patient {patient.patientId} — {patient.curr_program.length} exercises</Text>
+      <TouchableOpacity style={styles.startBtn} onPress={onStartSession}>
+        <Text style={styles.startBtnText}>⬤  Start Session</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATUS PILL + MODE SELECTOR
+// STATUS PILL
 // ─────────────────────────────────────────────────────────────────────────────
 
 function StatusPill({ ready }: { ready: boolean }) {
@@ -390,34 +508,6 @@ function StatusPill({ ready }: { ready: boolean }) {
     <View style={[styles.pill, { backgroundColor: color + '33' }]}>
       <View style={[styles.dot, { backgroundColor: color }]} />
       <Text style={[styles.pillText, { color }]}>{label}</Text>
-    </View>
-  );
-}
-
-function ModeSelector({
-  mode, onChange,
-}: { mode: SessionMode; onChange: (m: SessionMode) => void }) {
-  const modes: { key: SessionMode; label: string; sub: string }[] = [
-    { key: 'standing',   label: 'Standing',   sub: 'Balance' },
-    { key: 'transition', label: 'Transition', sub: 'Sit ↔ Stand' },
-    { key: 'walking',    label: 'Walking',    sub: 'Gait' },
-  ];
-  return (
-    <View style={styles.modeBar}>
-      {modes.map(({ key, label, sub }) => {
-        const active = mode === key;
-        return (
-          <TouchableOpacity
-            key={key}
-            style={[styles.modeBtn, active && styles.modeBtnActive]}
-            onPress={() => onChange(key)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.modeBtnLabel, active && styles.activeTxt]}>{label}</Text>
-            <Text style={[styles.modeBtnSub,   active && styles.activeTxt]}>{sub}</Text>
-          </TouchableOpacity>
-        );
-      })}
     </View>
   );
 }
@@ -449,33 +539,33 @@ const styles = StyleSheet.create({
   resetBtn:     { paddingHorizontal: 10, paddingVertical: 4 },
   resetBtnText: { fontSize: 12, color: C.muted, fontWeight: '500' },
 
-  recordBar: {
+  controlBar: {
     backgroundColor: 'rgba(13,27,42,0.92)',
-    paddingHorizontal: 12, paddingVertical: 10,
+    paddingHorizontal: 12, paddingVertical: 14,
     flexDirection: 'row', alignItems: 'center', gap: 10,
     borderTopWidth: 1, borderTopColor: C.border,
+    paddingBottom: Platform.OS === 'ios' ? 18 : 14,
   },
-  recordBtn: {
-    flex: 1, backgroundColor: 'rgba(0,212,255,0.08)',
+  promptBar: {
+    backgroundColor: 'rgba(13,27,42,0.94)',
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderTopWidth: 1, borderTopColor: C.border,
+    paddingBottom: Platform.OS === 'ios' ? 18 : 14,
+    gap: 6,
+  },
+  promptTitle:    { color: '#fff', fontSize: 18, fontWeight: '700' },
+  subtle:         { color: C.muted, fontSize: 12 },
+  startBtn: {
+    marginTop: 6, backgroundColor: 'rgba(0,212,255,0.10)',
     borderWidth: 1, borderColor: C.accent,
-    borderRadius: 10, paddingVertical: 10, alignItems: 'center',
+    borderRadius: 10, paddingVertical: 12, alignItems: 'center',
   },
-  recordBtnText:  { color: C.accent, fontSize: 14, fontWeight: '700' },
+  startBtnText:   { color: C.accent, fontSize: 14, fontWeight: '700' },
+
   countdownBadge: { backgroundColor: '#f44336', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, minWidth: 48, alignItems: 'center' },
   countdownText:  { color: '#fff', fontSize: 16, fontWeight: '800' },
-  recordingLabel: { flex: 1, color: '#f44336', fontSize: 12, fontWeight: '600' },
+  recordingLabel: { color: '#f44336', fontSize: 13, fontWeight: '700' },
   stopBtn:        { backgroundColor: 'rgba(244,67,54,0.15)', borderWidth: 1, borderColor: '#f44336', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
   stopBtnText:    { color: '#f44336', fontSize: 13, fontWeight: '700' },
   analyzingText:  { flex: 1, color: C.accent, fontSize: 13, fontWeight: '600', textAlign: 'center' },
-
-  modeBar: {
-    flexDirection: 'row', backgroundColor: 'rgba(13,27,42,0.95)',
-    paddingHorizontal: 12, paddingVertical: 10, gap: 10,
-    paddingBottom: Platform.OS === 'ios' ? 4 : 10,
-  },
-  modeBtn:       { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: C.border, backgroundColor: 'rgba(18,32,51,0.6)', gap: 3 },
-  modeBtnActive: { borderColor: C.accent, backgroundColor: 'rgba(0,212,255,0.12)' },
-  modeBtnLabel:  { fontSize: 13, fontWeight: '600', color: C.muted },
-  modeBtnSub:    { fontSize: 10, color: C.muted, opacity: 0.6 },
-  activeTxt:     { color: C.accent, opacity: 1 },
 });

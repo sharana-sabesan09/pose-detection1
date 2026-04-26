@@ -140,7 +140,7 @@ describe('exercise pipeline', () => {
       ...makeSquatRep(dtStand, fps, 90, 60),
       ...makeStanding(dtStand + dtRep, fps, 15),
     ];
-    const pipe = new ExercisePipeline('squat');
+    const pipe = new ExercisePipeline('rightSls');
     for (const { t, pose } of frames) pipe.onFrame(t, pose);
     const ranges = detectRepRanges(pipe.getFrameBuffer());
     expect(ranges.length).toBe(1);
@@ -155,7 +155,7 @@ describe('exercise pipeline', () => {
       ...makeSquatRep(dtStand, fps, 90, 60),
       ...makeStanding(dtStand + dtRep, fps, 15),
     ];
-    const pipe = new ExercisePipeline('squat');
+    const pipe = new ExercisePipeline('rightSls');
     for (const { t, pose } of frames) pipe.onFrame(t, pose);
     const session = pipe.finalize();
     expect(session.reps.length).toBe(1);
@@ -180,12 +180,14 @@ describe('exercise pipeline', () => {
       ...makeSquatRep(t2,  fps, 95, nFrames),
       ...makeStanding(t2 + dtRep, fps, 15),
     ];
-    const pipe = new ExercisePipeline('squat');
+    const pipe = new ExercisePipeline('rightSls');
     for (const { t, pose } of allFrames) pipe.onFrame(t, pose);
     const session = pipe.finalize();
     expect(session.reps.length).toBe(3);
     expect(session.summary.numReps).toBe(3);
-    expect(session.summary.avgDepth).toBeGreaterThan(60);
+    // avgDepth is nullable on SessionSummaryStats (walking returns null);
+    // for rep exercises it's always populated when reps > 0.
+    expect(session.summary.avgDepth!).toBeGreaterThan(60);
     expect(session.reps.map(r => r.repId)).toEqual([1, 2, 3]);
   });
 
@@ -196,7 +198,7 @@ describe('exercise pipeline', () => {
       ...makeSquatRep(dtStand, fps, 90, 60, { valgusOffset: 0.05 }),
       ...makeStanding(dtStand + dtRep, fps, 15),
     ];
-    const pipe = new ExercisePipeline('squat');
+    const pipe = new ExercisePipeline('rightSls');
     for (const { t, pose } of frames) pipe.onFrame(t, pose);
     const reps = pipe.finalize().reps;
     expect(reps.length).toBe(1);
@@ -204,7 +206,7 @@ describe('exercise pipeline', () => {
   });
 
   test('shallow movement produces no reps', () => {
-    const pipe = new ExercisePipeline('squat');
+    const pipe = new ExercisePipeline('rightSls');
     for (const { t, pose } of makeSquatRep(0, 30, 15, 60)) pipe.onFrame(t, pose);
     expect(pipe.finalize().reps.length).toBe(0);
   });
@@ -229,9 +231,33 @@ describe('exercise pipeline', () => {
     expect(s.classification).toBe('fair');
   });
 
+  test('walking exercise: returns empty reps and null rep-stats', () => {
+    // 30 seconds of standing-still frames. The walking aggregator should
+    // produce a SessionSummary with no reps and rep-derived fields set to null.
+    // Walking-specific fields may be undefined if the synthetic data lacks the
+    // relevant signal — the contract under test is the schema shape, not the
+    // gait values themselves.
+    const fps    = 30;
+    const frames = makeStanding(0, fps, fps * 30);
+    const pipe   = new ExercisePipeline('walking');
+    for (const { t, pose } of frames) pipe.onFrame(t, pose);
+
+    const session = pipe.finalize();
+    expect(session.exercise).toBe('walking');
+    expect(session.reps.length).toBe(0);
+    expect(session.summary.numReps).toBe(0);
+    expect(session.summary.avgDepth).toBeNull();
+    expect(session.summary.minDepth).toBeNull();
+    expect(session.summary.avgFppa).toBeNull();
+    expect(session.summary.maxFppa).toBeNull();
+    expect(session.summary.consistency).toBeNull();
+    // overallRating is always present — walking maps its scores onto good/fair/poor
+    expect(['good', 'fair', 'poor']).toContain(session.summary.overallRating);
+  });
+
   test('buildRepsCsv: header + one row per rep', () => {
     const fps = 30, dtStand = 15 * (1000 / fps), dtRep = 60 * (1000 / fps);
-    const pipe = new ExercisePipeline('squat');
+    const pipe = new ExercisePipeline('rightSls');
     for (const { t, pose } of [
       ...makeStanding(0, fps, 15),
       ...makeSquatRep(dtStand, fps, 90, 60),

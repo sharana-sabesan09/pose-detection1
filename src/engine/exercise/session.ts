@@ -47,6 +47,20 @@ function rateSession(reps: RepFeatures[]): RepClassification {
 }
 
 export function computeSessionSummary(reps: RepFeatures[]): SessionSummaryStats {
+  // No reps → return null for every rep-derived field rather than fabricating
+  // zeros. Walking goes through buildWalkingSummary instead and never lands here.
+  if (reps.length === 0) {
+    return {
+      numReps:       0,
+      avgDepth:      null,
+      minDepth:      null,
+      avgFppa:       null,
+      maxFppa:       null,
+      consistency:   null,
+      overallRating: 'poor',
+    };
+  }
+
   const depths = reps.map(r => r.features.kneeFlexionDeg);
   const fppas  = reps.map(r => r.features.fppaPeak);
 
@@ -57,9 +71,9 @@ export function computeSessionSummary(reps: RepFeatures[]): SessionSummaryStats 
   return {
     numReps:       reps.length,
     avgDepth,
-    minDepth:      depths.length ? Math.min(...depths) : 0,
+    minDepth:      Math.min(...depths),
     avgFppa:       mean(fppas),
-    maxFppa:       fppas.length ? Math.max(...fppas) : 0,
+    maxFppa:       Math.max(...fppas),
     consistency,
     overallRating: rateSession(reps),
   };

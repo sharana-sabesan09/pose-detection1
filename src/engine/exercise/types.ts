@@ -162,23 +162,86 @@ export interface RepFeatures {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Exercise type — explicit (side + movement) combination.
+// The patient's program prescribes one entry per (side, exercise) pair, so
+// the side never needs to be inferred from landmarks.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ExerciseType =
+  | 'leftSls'
+  | 'rightSls'
+  | 'leftLsd'
+  | 'rightLsd'
+  | 'walking';
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Session-level (FINAL OUTPUT)
+//
+// Rep-stat fields are nullable because walking does not produce reps and we
+// don't want to fabricate misleading zeros. Walking-only fields are optional
+// so they don't pollute squat/step-down outputs.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface SessionSummaryStats {
   numReps:        number;
-  avgDepth:       number;
-  minDepth:       number;
-  avgFppa:        number;
-  maxFppa:        number;
-  consistency:    number;            // 0–1, higher = more consistent depth
+  avgDepth:       number | null;
+  minDepth:       number | null;
+  avgFppa:        number | null;
+  maxFppa:        number | null;
+  consistency:    number | null;            // 0–1, higher = more consistent depth
   overallRating:  RepClassification;
+
+  // Walking-only metrics. Omitted entirely for rep-based exercises.
+  gaitAsymmetry?:    number;  // 0 = symmetric, 1 = max asymmetry
+  lateralSwayRange?: number;  // median 5s-window hip-X range (screen-fraction)
+  stabilityScore?:   number;  // 0–100, higher = steadier CoG during walking
 }
 
 export interface SessionSummary {
-  exercise: string;
-  reps:     RepFeatures[];
+  exercise: string;          // ExerciseType string for new pipelines; legacy code may pass arbitrary strings
+  reps:     RepFeatures[];   // empty for walking
   summary:  SessionSummaryStats;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Multi-exercise session (TOP-LEVEL OUTPUT)
+//
+// One recording session executes a list of (side+exercise) pairs back to back.
+// Each entry in `exercises` is the same shape as the previous single-exercise
+// session JSON so existing consumers can read individual entries unchanged.
+//
+// `patient.injuredJoint.romByExercise` keeps a per-exercise ROM score on the
+// flagged joint so longitudinal progress can be tracked across sessions.
+// Only exercises that were actually performed in this session appear there;
+// walking is excluded because it doesn't measure joint ROM.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface InjuredJointInfo {
+  name: string;                                                  // mediapipe-style joint name e.g. "right_knee"
+  romByExercise: Partial<Record<ExerciseType, number | null>>;    // null = exercise ran but no reps detected
+}
+
+export interface SessionPatient {
+  patientId: string;
+  injuredJoint: InjuredJointInfo;
+}
+
+export interface SessionExerciseEntry {
+  exercise:    string;
+  startedAtMs: number;
+  endedAtMs:   number;
+  durationMs:  number;
+  numReps:     number;
+  summary:     SessionSummary;
+}
+
+export interface MultiExerciseSession {
+  sessionId:   string;
+  startedAtMs: number;
+  endedAtMs:   number;
+  durationMs:  number;
+  patient:     SessionPatient;
+  exercises:   SessionExerciseEntry[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
