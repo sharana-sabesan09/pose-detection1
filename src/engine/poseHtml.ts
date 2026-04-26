@@ -102,8 +102,9 @@ export const POSE_HTML = `
     const GHOST_INTRO_FULLSCREEN_MS = 12000;
     /** Panel morphs fullscreen → corner PiP over this duration (ease-in-out). */
     const GHOST_LAYOUT_TRANSITION_MS = 700;
-    const GHOST_PANEL_BG = '#D7B1A5';
-    const GHOST_FILL_GREEN = '#15732a';
+    const GHOST_PANEL_BG = '#C2B280';
+    const GHOST_FILL_TRAINER = '#ffffff';
+    const GHOST_OUTLINE_TRAINER = '#000000';
     const GHOST_CORNER_MARGIN = 16;
     const GHOST_CORNER_W_FRAC = 0.28;
     const GHOST_CORNER_H_FRAC = 0.34;
@@ -112,6 +113,47 @@ export const POSE_HTML = `
       [23,25],[25,27],[27,29],[24,26],[26,28],[28,30],
       [11,13],[13,15],[12,14],[14,16],
     ];
+
+    /** Shoulder–hip perimeter; filled first so torso isn’t four overlapping capsules. */
+    const GHOST_TORSO_LOOP = [11, 12, 24, 23];
+
+    function ghostTorsoEdgeExcludedFromCapsules(a, b) {
+      const lo = a < b ? a : b;
+      const hi = a < b ? b : a;
+      return (
+        (lo === 11 && hi === 12) ||
+        (lo === 11 && hi === 23) ||
+        (lo === 12 && hi === 24) ||
+        (lo === 23 && hi === 24)
+      );
+    }
+
+    /** Half-width multiplier per bone pair (1 = base); thinner distal limbs, wider torso/hips. */
+    function ghostLimbHalfWMult(a, b) {
+      const lo = a < b ? a : b;
+      const hi = a < b ? b : a;
+      const key = lo + '-' + hi;
+      const m = {
+        '11-12': 1.2,
+        '11-23': 1.02, '12-24': 1.02,
+        '23-24': 1.28,
+        '23-25': 1.1, '24-26': 1.1,
+        '25-27': 0.66, '26-28': 0.66,
+        '27-29': 0.74, '28-30': 0.74,
+        '11-13': 0.78, '12-14': 0.78,
+        '13-15': 0.52, '14-16': 0.52,
+      };
+      return m[key] != null ? m[key] : 1;
+    }
+
+    const GHOST_JOINT_R_MULT = {
+      11: 1.14, 12: 1.14,
+      13: 1.02, 14: 1.02,
+      15: 0.72, 16: 0.72,
+      23: 1.18, 24: 1.18,
+      25: 1.05, 26: 1.05,
+      27: 0.98, 28: 0.98,
+    };
 
     // RN injects the current exercise after the page loads. Default to hidden so
     // the screen never flashes an outdated calibration ghost on boot/remount.
@@ -124,15 +166,51 @@ export const POSE_HTML = `
     let ghostLayoutStage = 'corner';
     let ghostIntroStartedMs = 0;
     let ghostTransitionStartMs = 0;
+    /** Locked zoom per panel size so bbox jitter doesn’t “breathe” the silhouette each frame. */
+    let ghostScaleLocked = 0;
+    let ghostScaleLockPanelW = -1;
+    let ghostScaleLockPanelH = -1;
+    let ghostTransitionS0 = 0;
+    let ghostTransitionS1 = 0;
+
+    function resetGhostScaleLocks() {
+      ghostScaleLocked = 0;
+      ghostScaleLockPanelW = -1;
+      ghostScaleLockPanelH = -1;
+      ghostTransitionS0 = 0;
+      ghostTransitionS1 = 0;
+    }
 
     window.__setGhostExercise = (ex) => {
       ghostExercise = ex || 'walking';
       ghostPhase = 0;
+      resetGhostScaleLocks();
     };
 
     window.__ghostStartRecordingLayout = function () {
       ghostLayoutStage = 'fullscreen';
       ghostIntroStartedMs = performance.now();
+      resetGhostScaleLocks();
+    };
+
+    window.__switchCamera = async function(facingMode) {
+      try {
+        if (video.srcObject) {
+          video.srcObject.getTracks().forEach(function(t) { t.stop(); });
+          video.srcObject = null;
+        }
+        var mirror = facingMode === 'user';
+        video.style.transform = mirror ? 'scaleX(-1)' : 'none';
+        canvas.style.transform = mirror ? 'scaleX(-1)' : 'none';
+        lastTs = -1;
+        var stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+        video.srcObject = stream;
+      } catch(e) {
+        msg.textContent = 'Camera error: ' + e.message;
+      }
     };
 
     function alignGhostLm(lm, vw, vh, scale, ox, oy, W, H) {
@@ -165,8 +243,29 @@ export const POSE_HTML = `
       return out;
     }
 
-    /** Filled limb “tube” between two screen points (silhouette, not stick lines). */
-    function fillLimbCapsule(ctx, ax, ay, bx, by, halfW) {
+    function fillStrokeTorsoQuad(frame, vw, vh, sc, ox, oy, W, H, outlineW) {
+      const pts = [];
+      for (const idx of GHOST_TORSO_LOOP) {
+        const p = ghostPx(frame[idx], vw, vh, sc, ox, oy, W, H);
+        if (p.v < 0.2) return;
+        pts.push(p);
+      }
+      if (pts.length !== 4) return;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.closePath();
+      ctx.fillStyle = GHOST_FILL_TRAINER;
+      ctx.fill();
+      ctx.strokeStyle = GHOST_OUTLINE_TRAINER;
+      ctx.lineWidth = outlineW;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    }
+
+    /** Filled limb “tube” + black outline between two screen points. */
+    function fillStrokeLimbCapsule(ctx, ax, ay, bx, by, halfW, outlineW) {
       const dx = bx - ax, dy = by - ay;
       const len = Math.hypot(dx, dy) || 1;
       const nx = (-dy / len) * halfW;
@@ -177,7 +276,13 @@ export const POSE_HTML = `
       ctx.lineTo(bx - nx, by - ny);
       ctx.lineTo(bx + nx, by + ny);
       ctx.closePath();
+      ctx.fillStyle = GHOST_FILL_TRAINER;
       ctx.fill();
+      ctx.strokeStyle = GHOST_OUTLINE_TRAINER;
+      ctx.lineWidth = outlineW;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.stroke();
     }
 
     const GHOST_JOINT_IDX = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
@@ -196,7 +301,7 @@ export const POSE_HTML = `
       for (const i of GHOST_JOINT_IDX) acc(frame[i]);
       acc(frame[0]);
       if (minX === Infinity) return null;
-      const pad = 28;
+      const pad = 40;
       return { minX: minX - pad, maxX: maxX + pad, minY: minY - pad, maxY: maxY + pad };
     }
 
@@ -217,8 +322,8 @@ export const POSE_HTML = `
     }
 
     function drawGhostInTrainerPanel(
-      frame, vw, vh, sc, ox, oy, W, H, halfW, jointR,
-      panelX, panelY, panelW, panelH, innerPad,
+      frame, vw, vh, sc, ox, oy, W, H, baseLimbHalf, jointRBase,
+      panelX, panelY, panelW, panelH, innerPad, forcedScale,
     ) {
       const bb = ghostBBoxScreenPx(frame, vw, vh, sc, ox, oy, W, H);
       if (!bb) return;
@@ -227,38 +332,72 @@ export const POSE_HTML = `
       const bw = Math.max(bb.maxX - bb.minX, 48);
       const bh = Math.max(bb.maxY - bb.minY, 72);
       const pad = innerPad;
-      const s = Math.min((panelW - 2 * pad) / bw, (panelH - 2 * pad) / bh);
+      const sTarget = Math.min((panelW - 2 * pad) / bw, (panelH - 2 * pad) / bh) * 0.96;
+      let s;
+      if (forcedScale != null && forcedScale > 0) {
+        s = forcedScale;
+      } else {
+        if (ghostScaleLockPanelW !== panelW || ghostScaleLockPanelH !== panelH) {
+          ghostScaleLocked = 0;
+          ghostScaleLockPanelW = panelW;
+          ghostScaleLockPanelH = panelH;
+        }
+        if (ghostScaleLocked <= 0) ghostScaleLocked = sTarget;
+        s = ghostScaleLocked;
+      }
       ctx.save();
       ctx.fillStyle = GHOST_PANEL_BG;
       ctx.fillRect(Math.floor(panelX), Math.floor(panelY), Math.ceil(panelW), Math.ceil(panelH));
       ctx.translate(panelX + panelW / 2, panelY + panelH / 2);
       ctx.scale(s, s);
       ctx.translate(-cx, -cy);
-      drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, halfW, jointR);
+      drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, baseLimbHalf, jointRBase);
       ctx.restore();
     }
 
-    function drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, halfW, jointR) {
+    function drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, baseLimbHalf, jointRBase) {
       ctx.globalAlpha = 1;
-      ctx.fillStyle = GHOST_FILL_GREEN;
+      const torsoOw = Math.max(2.4, Math.min(4.2, baseLimbHalf * 0.42));
+      fillStrokeTorsoQuad(frame, vw, vh, sc, ox, oy, W, H, torsoOw);
       for (const [a, b] of GHOST_CONNECTIONS) {
+        if (ghostTorsoEdgeExcludedFromCapsules(a, b)) continue;
         const pa = ghostPx(frame[a], vw, vh, sc, ox, oy, W, H);
         const pb = ghostPx(frame[b], vw, vh, sc, ox, oy, W, H);
         if (pa.v < 0.2 || pb.v < 0.2) continue;
-        fillLimbCapsule(ctx, pa.x, pa.y, pb.x, pb.y, halfW);
+        const hw = baseLimbHalf * ghostLimbHalfWMult(a, b);
+        const ow = Math.max(2, Math.min(4, hw * 0.34));
+        fillStrokeLimbCapsule(ctx, pa.x, pa.y, pb.x, pb.y, hw, ow);
       }
       for (const i of GHOST_JOINT_IDX) {
         const p = ghostPx(frame[i], vw, vh, sc, ox, oy, W, H);
         if (p.v < 0.2) continue;
+        const jr = jointRBase * (GHOST_JOINT_R_MULT[i] != null ? GHOST_JOINT_R_MULT[i] : 1);
         ctx.beginPath();
-        ctx.arc(p.x, p.y, jointR, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, jr, 0, Math.PI * 2);
+        ctx.fillStyle = GHOST_FILL_TRAINER;
         ctx.fill();
+        ctx.strokeStyle = GHOST_OUTLINE_TRAINER;
+        ctx.lineWidth = Math.max(2, Math.min(3.5, jr * 0.26));
+        ctx.stroke();
       }
+      const p11 = ghostPx(frame[11], vw, vh, sc, ox, oy, W, H);
+      const p12 = ghostPx(frame[12], vw, vh, sc, ox, oy, W, H);
       const nose = ghostPx(frame[0], vw, vh, sc, ox, oy, W, H);
+      if (nose.v >= 0.2 && p11.v >= 0.2 && p12.v >= 0.2) {
+        const mx = (p11.x + p12.x) / 2;
+        const my = (p11.y + p12.y) / 2;
+        const nh = baseLimbHalf * 0.4;
+        fillStrokeLimbCapsule(ctx, nose.x, nose.y, mx, my, nh, Math.max(1.8, nh * 0.38));
+      }
       if (nose.v >= 0.2) {
+        const headR = Math.max(jointRBase * 1.75, baseLimbHalf * 2.25);
         ctx.beginPath();
-        ctx.arc(nose.x, nose.y, halfW * 1.35, 0, Math.PI * 2);
+        ctx.arc(nose.x, nose.y, headR, 0, Math.PI * 2);
+        ctx.fillStyle = GHOST_FILL_TRAINER;
         ctx.fill();
+        ctx.strokeStyle = GHOST_OUTLINE_TRAINER;
+        ctx.lineWidth = Math.max(2.2, Math.min(4, headR * 0.14));
+        ctx.stroke();
       }
     }
 
@@ -278,23 +417,36 @@ export const POSE_HTML = `
       const t = ph - Math.floor(ph);
       const frame = lerpLandmarks(cycle[i0], cycle[i1], t);
 
-      if (ghostLayoutStage === 'fullscreen' && ghostIntroStartedMs > 0 &&
-          now - ghostIntroStartedMs >= GHOST_INTRO_FULLSCREEN_MS) {
-        ghostLayoutStage = 'transition';
-        ghostTransitionStartMs = now;
-      }
-
-      const halfW = Math.max(12, Math.min(W, H) * 0.02);
-      const jointR = halfW * 1.15;
+      const baseLimbHalf = Math.max(9, Math.min(W, H) * 0.0155);
+      const jointRBase = baseLimbHalf * 1.12;
       const rects = ghostPanelRects(W, H);
       const padFull = 40;
       const padCorner = 12;
 
+      if (ghostLayoutStage === 'fullscreen' && ghostIntroStartedMs > 0 &&
+          now - ghostIntroStartedMs >= GHOST_INTRO_FULLSCREEN_MS) {
+        const Bpre = rects.corner;
+        const bbT = ghostBBoxScreenPx(frame, vw, vh, scale, offsetX, offsetY, W, H);
+        if (bbT) {
+          const bwT = Math.max(bbT.maxX - bbT.minX, 48);
+          const bhT = Math.max(bbT.maxY - bbT.minY, 72);
+          ghostTransitionS1 =
+            Math.min((Bpre.w - 2 * padCorner) / bwT, (Bpre.h - 2 * padCorner) / bhT) * 0.96;
+        } else {
+          ghostTransitionS1 =
+            ghostScaleLocked > 0 ? ghostScaleLocked * (Bpre.w / W) * 0.92 : 0.08;
+        }
+        ghostTransitionS0 = ghostScaleLocked > 0 ? ghostScaleLocked : ghostTransitionS1;
+        if (ghostTransitionS0 <= 0) ghostTransitionS0 = ghostTransitionS1;
+        ghostLayoutStage = 'transition';
+        ghostTransitionStartMs = now;
+      }
+
       if (ghostLayoutStage === 'fullscreen') {
         const r = rects.fullscreen;
         drawGhostInTrainerPanel(
-          frame, vw, vh, scale, offsetX, offsetY, W, H, halfW, jointR,
-          r.x, r.y, r.w, r.h, padFull,
+          frame, vw, vh, scale, offsetX, offsetY, W, H, baseLimbHalf, jointRBase,
+          r.x, r.y, r.w, r.h, padFull, null,
         );
       } else if (ghostLayoutStage === 'transition') {
         const elapsed = now - ghostTransitionStartMs;
@@ -302,6 +454,9 @@ export const POSE_HTML = `
         if (elapsed >= GHOST_LAYOUT_TRANSITION_MS || u >= 1) {
           ghostLayoutStage = 'corner';
           u = 1;
+          ghostScaleLocked = ghostTransitionS1;
+          ghostScaleLockPanelW = rects.corner.w;
+          ghostScaleLockPanelH = rects.corner.h;
         }
         const A = rects.fullscreen;
         const B = rects.corner;
@@ -310,15 +465,16 @@ export const POSE_HTML = `
         const rw = A.w + (B.w - A.w) * u;
         const rh = A.h + (B.h - A.h) * u;
         const innerPad = padFull + (padCorner - padFull) * u;
+        const sLerp = ghostTransitionS0 + (ghostTransitionS1 - ghostTransitionS0) * u;
         drawGhostInTrainerPanel(
-          frame, vw, vh, scale, offsetX, offsetY, W, H, halfW, jointR,
-          rx, ry, rw, rh, innerPad,
+          frame, vw, vh, scale, offsetX, offsetY, W, H, baseLimbHalf, jointRBase,
+          rx, ry, rw, rh, innerPad, sLerp,
         );
       } else if (ghostLayoutStage === 'corner') {
         const r = rects.corner;
         drawGhostInTrainerPanel(
-          frame, vw, vh, scale, offsetX, offsetY, W, H, halfW, jointR,
-          r.x, r.y, r.w, r.h, padCorner,
+          frame, vw, vh, scale, offsetX, offsetY, W, H, baseLimbHalf, jointRBase,
+          r.x, r.y, r.w, r.h, padCorner, null,
         );
       }
     }
@@ -416,6 +572,10 @@ export function buildGhostExerciseInjection(exercise: string | null | undefined)
   return `try { window.__setGhostExercise && window.__setGhostExercise(${JSON.stringify(
     ghostExercise,
   )}); } catch (e) {} true;`;
+}
+
+export function buildCameraSwitchInjection(facingMode: 'user' | 'environment'): string {
+  return `try { window.__switchCamera && window.__switchCamera(${JSON.stringify(facingMode)}); } catch(e) {} true;`;
 }
 
 /** Call when user starts a calibration rep recording — fullscreen trainer panel, then corner PiP. */

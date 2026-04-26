@@ -20,14 +20,7 @@ type MovementItem = {
 
 export default function MovementsScreen({ navigation }: Props) {
   const [filter, setFilter] = useState<'all' | 'today' | 'knee' | 'hip' | 'ankle' | 'core' | 'gait'>('all');
-  const [moves, setMoves] = useState<MovementItem[]>([
-    { id: 1, title: 'Mini squat', joint: 'knee', sets: '3 × 12', difficulty: 'easy', done: true },
-    { id: 2, title: 'Heel raises', joint: 'ankle', sets: '3 × 15', difficulty: 'easy', done: true },
-    { id: 3, title: 'Single-leg balance', joint: 'ankle', sets: '3 × 30s', difficulty: 'med', done: true },
-    { id: 4, title: 'Step-up to bench', joint: 'knee', sets: '3 × 10', difficulty: 'med', today: true },
-    { id: 5, title: 'Side plank (mod.)', joint: 'core', sets: '2 × 30s', difficulty: 'med', today: true },
-    { id: 6, title: 'Hip airplane', joint: 'hip', sets: '3 × 6', difficulty: 'hard' },
-  ]);
+  const [moves, setMoves] = useState<MovementItem[]>([]);
 
   React.useEffect(() => {
     loadPatientInfo()
@@ -43,12 +36,8 @@ export default function MovementsScreen({ navigation }: Props) {
             today: meta.today,
           } as MovementItem;
         });
-        setMoves(current => {
-          const deduped = fromProgram.filter(
-            next => !current.some(item => item.title === next.title),
-          );
-          return [...current, ...deduped];
-        });
+        // Source of truth is the patient's curr_program — replace, don't merge.
+        setMoves(fromProgram);
       })
       .catch(() => undefined);
   }, []);

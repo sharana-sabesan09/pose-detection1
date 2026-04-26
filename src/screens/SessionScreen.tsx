@@ -66,6 +66,7 @@ import { BACKEND_URL, LOCAL_EXPORTS_URL } from '../constants';
 import {
   buildGhostExerciseInjection,
   buildGhostRecordingLayoutInjection,
+  buildCameraSwitchInjection,
   POSE_HTML,
   POSE_WEBVIEW_KEY,
 } from '../engine/poseHtml';
@@ -161,6 +162,7 @@ export default function SessionScreen() {
   const [initialized, setInitialized] = useState(false);
   const [webViewActive, setWebViewActive] = useState(false);
   const [webViewReady, setWebViewReady] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<'user' | 'environment'>('user');
 
   // ── Session state ─────────────────────────────────────────────────────────
   const [sessionState, setSessionState] = useState<SessionState>('idle');
@@ -538,6 +540,14 @@ export default function SessionScreen() {
     ]);
   }, [finishCurrentExercise, finalizeSession]);
 
+  const toggleCamera = useCallback(() => {
+    const next = cameraFacing === 'user' ? 'environment' : 'user';
+    setCameraFacing(next);
+    try {
+      webViewRef.current?.injectJavaScript(buildCameraSwitchInjection(next));
+    } catch { /* non-fatal */ }
+  }, [cameraFacing]);
+
   // ── Reset profile ─────────────────────────────────────────────────────────
   const handleHeaderBack = () => {
     if (sessionState === 'recording' || sessionState === 'analyzing') {
@@ -551,7 +561,6 @@ export default function SessionScreen() {
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
 
-  const liveMode: SessionMode = currentExercise ? modeForExercise(currentExercise) : 'standing';
   const currentExerciseLabel = currentExercise ? EXERCISE_LABELS[currentExercise] : 'Session';
 
   return (
@@ -587,6 +596,13 @@ export default function SessionScreen() {
             sessionState={sessionState}
             timeLeft={timeLeft}
           />
+          <TouchableOpacity
+            style={styles.topButton}
+            onPress={toggleCamera}
+            disabled={!webViewReady}
+          >
+            <Text style={styles.topButtonText}>{'⇄'}</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.exercisePillWrap}>
@@ -610,7 +626,11 @@ export default function SessionScreen() {
         </View>
 
         <View style={styles.bottomStack} pointerEvents="box-none">
-          <LiveScoresCard scores={scores} initialized={initialized} />
+          <LiveScoresCard
+            scores={scores}
+            initialized={initialized}
+            showAll={currentExercise === 'walking' && sessionState === 'recording'}
+          />
           <SessionControls
             state={sessionState}
             patient={patient}
@@ -624,32 +644,6 @@ export default function SessionScreen() {
             onStartAnotherSession={startSession}
             onGoHome={() => navigation.navigate('Home')}
           />
-          <View style={styles.modeRow}>
-            {[
-              { id: 'standing', label: 'Standing', sub: 'Balance' },
-              { id: 'transition', label: 'Sit -> Stand', sub: 'Transition' },
-              { id: 'walking', label: 'Walking', sub: 'Gait' },
-            ].map(mode => {
-              const active = liveMode === mode.id;
-              return (
-                <View key={mode.id} style={styles.modeCard}>
-                  <View
-                    style={[
-                      styles.modePill,
-                      active ? styles.modePillActive : styles.modePillInactive,
-                    ]}
-                  >
-                    <Text style={[styles.modeLabel, active && styles.modeLabelActive]}>
-                      {mode.label}
-                    </Text>
-                    <Text style={[styles.modeSub, active && styles.modeSubActive]}>
-                      {mode.sub}
-                    </Text>
-                  </View>
-                </View>
-              );
-            })}
-          </View>
         </View>
       </SafeAreaView>
     </View>
@@ -822,16 +816,24 @@ function SessionControls({
 function LiveScoresCard({
   scores,
   initialized,
+  showAll,
 }: {
   scores: RiskScores;
   initialized: boolean;
+  // true only during the walking phase — surfaces gait + sway alongside balance
+  // and fall risk. For SLS / LSD / awaiting / idle states we keep only the two
+  // scores that are clinically meaningful for stationary exercises.
+  showAll: boolean;
 }) {
-  const items = [
-    { label: 'Balance', value: Math.round(scores.balanceStability) },
-    { label: 'Gait', value: Math.round(scores.gaitRegularity) },
-    { label: 'Sway', value: Math.round(scores.lateralSway) },
+  const allItems = [
+    { label: 'Balance',   value: Math.round(scores.balanceStability) },
+    { label: 'Gait',      value: Math.round(scores.gaitRegularity) },
+    { label: 'Sway',      value: Math.round(scores.lateralSway) },
     { label: 'Fall risk', value: Math.round(100 - scores.overallFallRisk), inverse: true },
   ];
+  const items = showAll
+    ? allItems
+    : allItems.filter(it => it.label === 'Balance' || it.label === 'Fall risk');
 
   return (
     <SketchBox
@@ -1014,8 +1016,9 @@ const styles = StyleSheet.create({
   bottomStack: {
     marginTop: 'auto',
     paddingHorizontal: 14,
-    paddingBottom: Platform.OS === 'ios' ? 18 : 16,
-    gap: 12,
+    // Lift buttons clear of the home indicator / nav bar.
+    paddingBottom: Platform.OS === 'ios' ? 36 : 28,
+    gap: 10,
   },
   scoreCard: {
     paddingHorizontal: 16,
@@ -1096,26 +1099,26 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     flex: 1,
-    minHeight: 50,
-    borderRadius: 14,
+    minHeight: 42,
+    borderRadius: 12,
     backgroundColor: COLORS.ink,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
   },
   primaryButtonDanger: {
     backgroundColor: COLORS.bad,
   },
   primaryButtonText: {
     fontFamily: FONTS.handBold,
-    fontSize: 16,
+    fontSize: 14,
     color: COLORS.paper,
   },
   secondaryButton: {
-    minHeight: 50,
-    minWidth: 78,
-    borderRadius: 14,
-    paddingHorizontal: 16,
+    minHeight: 42,
+    minWidth: 68,
+    borderRadius: 12,
+    paddingHorizontal: 14,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(243,236,219,0.92)',
@@ -1124,47 +1127,7 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     fontFamily: FONTS.handBold,
-    fontSize: 16,
+    fontSize: 14,
     color: COLORS.ink,
-  },
-  modeRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  modeCard: {
-    flex: 1,
-  },
-  modePill: {
-    borderRadius: 12,
-    borderWidth: 1.5,
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    alignItems: 'center',
-  },
-  modePillActive: {
-    backgroundColor: 'rgba(243,236,219,0.92)',
-    borderColor: 'rgba(243,236,219,0.92)',
-  },
-  modePillInactive: {
-    backgroundColor: 'rgba(243,236,219,0.12)',
-    borderColor: 'rgba(243,236,219,0.35)',
-  },
-  modeLabel: {
-    fontFamily: FONTS.display,
-    fontSize: 16,
-    color: COLORS.paper,
-  },
-  modeLabelActive: {
-    color: COLORS.ink,
-  },
-  modeSub: {
-    marginTop: 1,
-    fontFamily: FONTS.hand,
-    fontSize: 10,
-    color: 'rgba(243,236,219,0.55)',
-    letterSpacing: 1,
-  },
-  modeSubActive: {
-    color: COLORS.ink3,
   },
 });

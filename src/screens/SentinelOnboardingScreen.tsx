@@ -254,7 +254,7 @@ export default function SentinelOnboardingScreen({ navigation, route }: Props) {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.welcomeCenter}>
-            <Text style={styles.brand}>Sentinel</Text>
+            <Text style={styles.brand}>onTrack</Text>
             <View style={styles.centeredSquiggle}>
               <Squiggle width={140} />
             </View>
@@ -761,7 +761,7 @@ function ClinicalVoiceSession({
     } catch {
       setVoiceState('idle');
       stopPulse();
-      Alert.alert('Microphone unavailable', 'Make sure Sentinel has microphone permission.');
+      Alert.alert('Microphone unavailable', 'Make sure onTrack has microphone permission.');
     }
   };
 
