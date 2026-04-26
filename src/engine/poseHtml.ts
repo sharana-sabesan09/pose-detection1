@@ -98,11 +98,12 @@ export const POSE_HTML = `
     const GHOST_CYCLES = ${JSON.stringify(GHOST_CYCLE_BY_EXERCISE)};
     /** Wall-clock ms per 1.0 step along the keyframe index (lerped every rAF). */
     const GHOST_MS_PER_KEYFRAME = 204;
-    /** Side “animation” panel: black strip + large ghost, then fly to corner after this many ms. */
-    const GHOST_INTRO_SIDE_MS = 14500;
-    /** Black panel morphs side → corner over this duration (ease-in-out). */
+    /** Fullscreen trainer panel, then fly to corner after ~a couple of demo reps at this tempo. */
+    const GHOST_INTRO_FULLSCREEN_MS = 12000;
+    /** Panel morphs fullscreen → corner PiP over this duration (ease-in-out). */
     const GHOST_LAYOUT_TRANSITION_MS = 700;
-    const GHOST_SIDE_PANEL_W_FRAC = 0.4;
+    const GHOST_PANEL_BG = '#D7B1A5';
+    const GHOST_FILL_GREEN = '#15732a';
     const GHOST_CORNER_MARGIN = 16;
     const GHOST_CORNER_W_FRAC = 0.28;
     const GHOST_CORNER_H_FRAC = 0.34;
@@ -119,7 +120,7 @@ export const POSE_HTML = `
     let ghostPhase = 0;
     let ghostLastRafNow = 0;
     let lastAlignedLandmarks = null;
-    /** 'side' | 'transition' | 'corner' — transition animates black panel to PiP. */
+    /** 'fullscreen' | 'transition' | 'corner' — panel shrinks to bottom-right PiP. */
     let ghostLayoutStage = 'corner';
     let ghostIntroStartedMs = 0;
     let ghostTransitionStartMs = 0;
@@ -130,7 +131,7 @@ export const POSE_HTML = `
     };
 
     window.__ghostStartRecordingLayout = function () {
-      ghostLayoutStage = 'side';
+      ghostLayoutStage = 'fullscreen';
       ghostIntroStartedMs = performance.now();
     };
 
@@ -205,18 +206,17 @@ export const POSE_HTML = `
     }
 
     function ghostPanelRects(W, H) {
-      const sideW = Math.round(W * GHOST_SIDE_PANEL_W_FRAC);
       const cw = Math.round(W * GHOST_CORNER_W_FRAC);
       const ch = Math.round(H * GHOST_CORNER_H_FRAC);
       const cx = W - cw - GHOST_CORNER_MARGIN;
       const cy = H - ch - GHOST_CORNER_MARGIN;
       return {
-        side: { x: 0, y: 0, w: sideW, h: H },
+        fullscreen: { x: 0, y: 0, w: W, h: H },
         corner: { x: cx, y: cy, w: cw, h: ch },
       };
     }
 
-    function drawGhostInBlackPanel(
+    function drawGhostInTrainerPanel(
       frame, vw, vh, sc, ox, oy, W, H, halfW, jointR,
       panelX, panelY, panelW, panelH, innerPad,
     ) {
@@ -229,7 +229,7 @@ export const POSE_HTML = `
       const pad = innerPad;
       const s = Math.min((panelW - 2 * pad) / bw, (panelH - 2 * pad) / bh);
       ctx.save();
-      ctx.fillStyle = '#000000';
+      ctx.fillStyle = GHOST_PANEL_BG;
       ctx.fillRect(Math.floor(panelX), Math.floor(panelY), Math.ceil(panelW), Math.ceil(panelH));
       ctx.translate(panelX + panelW / 2, panelY + panelH / 2);
       ctx.scale(s, s);
@@ -239,8 +239,8 @@ export const POSE_HTML = `
     }
 
     function drawGhostSilhouetteInCurrentTransform(frame, vw, vh, sc, ox, oy, W, H, halfW, jointR) {
-      ctx.globalAlpha = 0.72;
-      ctx.fillStyle = '#248a3d';
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = GHOST_FILL_GREEN;
       for (const [a, b] of GHOST_CONNECTIONS) {
         const pa = ghostPx(frame[a], vw, vh, sc, ox, oy, W, H);
         const pb = ghostPx(frame[b], vw, vh, sc, ox, oy, W, H);
@@ -278,8 +278,8 @@ export const POSE_HTML = `
       const t = ph - Math.floor(ph);
       const frame = lerpLandmarks(cycle[i0], cycle[i1], t);
 
-      if (ghostLayoutStage === 'side' && ghostIntroStartedMs > 0 &&
-          now - ghostIntroStartedMs >= GHOST_INTRO_SIDE_MS) {
+      if (ghostLayoutStage === 'fullscreen' && ghostIntroStartedMs > 0 &&
+          now - ghostIntroStartedMs >= GHOST_INTRO_FULLSCREEN_MS) {
         ghostLayoutStage = 'transition';
         ghostTransitionStartMs = now;
       }
@@ -287,12 +287,14 @@ export const POSE_HTML = `
       const halfW = Math.max(12, Math.min(W, H) * 0.02);
       const jointR = halfW * 1.15;
       const rects = ghostPanelRects(W, H);
+      const padFull = 40;
+      const padCorner = 12;
 
-      if (ghostLayoutStage === 'side') {
-        const r = rects.side;
-        drawGhostInBlackPanel(
+      if (ghostLayoutStage === 'fullscreen') {
+        const r = rects.fullscreen;
+        drawGhostInTrainerPanel(
           frame, vw, vh, scale, offsetX, offsetY, W, H, halfW, jointR,
-          r.x, r.y, r.w, r.h, 20,
+          r.x, r.y, r.w, r.h, padFull,
         );
       } else if (ghostLayoutStage === 'transition') {
         const elapsed = now - ghostTransitionStartMs;
@@ -301,22 +303,22 @@ export const POSE_HTML = `
           ghostLayoutStage = 'corner';
           u = 1;
         }
-        const A = rects.side;
+        const A = rects.fullscreen;
         const B = rects.corner;
         const rx = A.x + (B.x - A.x) * u;
         const ry = A.y + (B.y - A.y) * u;
         const rw = A.w + (B.w - A.w) * u;
         const rh = A.h + (B.h - A.h) * u;
-        const innerPad = 20 + (12 - 20) * u;
-        drawGhostInBlackPanel(
+        const innerPad = padFull + (padCorner - padFull) * u;
+        drawGhostInTrainerPanel(
           frame, vw, vh, scale, offsetX, offsetY, W, H, halfW, jointR,
           rx, ry, rw, rh, innerPad,
         );
       } else if (ghostLayoutStage === 'corner') {
         const r = rects.corner;
-        drawGhostInBlackPanel(
+        drawGhostInTrainerPanel(
           frame, vw, vh, scale, offsetX, offsetY, W, H, halfW, jointR,
-          r.x, r.y, r.w, r.h, 12,
+          r.x, r.y, r.w, r.h, padCorner,
         );
       }
     }
@@ -416,7 +418,7 @@ export function buildGhostExerciseInjection(exercise: string | null | undefined)
   )}); } catch (e) {} true;`;
 }
 
-/** Call when user starts a calibration rep recording — beside-user panel, then corner PiP. */
+/** Call when user starts a calibration rep recording — fullscreen trainer panel, then corner PiP. */
 export function buildGhostRecordingLayoutInjection(exercise: string | null | undefined): string {
   const ex = exercise ?? 'walking';
   return `try {
