@@ -306,6 +306,8 @@ async def get_patient_overview(
         created_at=patient.created_at,
         updated_at=patient.updated_at,
         session_count=session_count,
+        pt_session_count=pt_session_count,
+        exercise_visit_count=exercise_visit_count,
         accumulated_scores=(
             AccumulatedScoresResponse(
                 fall_risk_avg=accumulated.fall_risk_avg,

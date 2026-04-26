@@ -38,8 +38,8 @@ export default function HomeScreen({ navigation }: Props) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [patientInfo, setPatientInfo] = useState<PatientInfo | null>(null);
   const [latestReport, setLatestReport] = useState<LatestReport>(null);
-  const [reinjuryRisk, setReinjuryRisk] = useState(14);
-  const [sessionCount, setSessionCount] = useState(9);
+  const [reinjuryRisk, setReinjuryRisk] = useState<number | null>(null);
+  const [sessionCount, setSessionCount] = useState<number | null>(null);
 
   const loadData = useCallback(async () => {
     const [storedProfile, patient] = await Promise.all([
@@ -52,20 +52,22 @@ export default function HomeScreen({ navigation }: Props) {
 
     if (!storedProfile?.patientId) {
       setLatestReport(null);
-      setReinjuryRisk(14);
-      setSessionCount(9);
+      setReinjuryRisk(null);
+      setSessionCount(null);
       return;
     }
 
     try {
       const overview = await fetchPatientOverview(storedProfile.patientId);
       setReinjuryRisk(
-        Math.round(overview.accumulated_scores?.reinjury_risk_avg ?? 14),
+        overview.accumulated_scores?.reinjury_risk_avg != null
+          ? Math.round(overview.accumulated_scores.reinjury_risk_avg)
+          : null,
       );
-      setSessionCount(overview.session_count || 9);
+      setSessionCount(overview.session_count ?? 0);
     } catch {
-      setReinjuryRisk(14);
-      setSessionCount(9);
+      setReinjuryRisk(null);
+      setSessionCount(null);
     }
 
     try {
@@ -85,10 +87,9 @@ export default function HomeScreen({ navigation }: Props) {
   const displayName = profile?.name || 'friend';
   const initial = displayName.slice(0, 1).toUpperCase();
   const movementCount = useMemo(() => {
-    return patientInfo?.curr_program?.length ?? 4;
+    return patientInfo?.curr_program?.length ?? 0;
   }, [patientInfo]);
-
-  const completedDots = Math.max(0, Math.min(12, sessionCount));
+  const completedDots = Math.max(0, Math.min(12, sessionCount ?? 0));
 
   return (
     <View style={styles.root}>
@@ -139,18 +140,17 @@ export default function HomeScreen({ navigation }: Props) {
                     stroke={COLORS.paper}
                     fill="rgba(243,236,219,0.08)"
                   >
-                    <Text style={styles.playIcon}>▶</Text>
+                    <Text style={styles.playIcon}>{'>'}</Text>
                   </SketchCircle>
                   <Text style={styles.ctaMeta}>
-                    ~12 min · {movementCount} movements queued
+                    {movementCount > 0
+                      ? `~12 min - ${movementCount} movements ready`
+                      : '~12 min - session ready'}
                   </Text>
                 </View>
               </View>
             </SketchBox>
           </Pressable>
-          <View style={styles.streakBadge}>
-            <Text style={styles.streakText}>3-day streak ★</Text>
-          </View>
         </View>
 
         <View style={styles.metricsGrid}>
@@ -162,11 +162,15 @@ export default function HomeScreen({ navigation }: Props) {
             <Text style={styles.metricMicro}>RE-INJURY RISK</Text>
             <View style={styles.metricValueRow}>
               <Text style={[styles.metricBig, { color: COLORS.accent }]}>
-                {reinjuryRisk}
-                <Text style={styles.metricPercent}>%</Text>
+                {reinjuryRisk != null ? reinjuryRisk : '--'}
+                {reinjuryRisk != null ? (
+                  <Text style={styles.metricPercent}>%</Text>
+                ) : null}
               </Text>
             </View>
-            <Text style={styles.metricSmall}>↓ 3% this week</Text>
+            <Text style={styles.metricSmall}>
+              {reinjuryRisk != null ? 'from recorded sessions' : 'Awaiting scored sessions'}
+            </Text>
           </SketchBox>
 
           <SketchBox
@@ -174,10 +178,12 @@ export default function HomeScreen({ navigation }: Props) {
             style={styles.metricCard}
             fill="rgba(255,250,235,0.5)"
           >
-            <Text style={styles.metricMicro}>SESSIONS DONE</Text>
+            <Text style={styles.metricMicro}>SESSIONS RECORDED</Text>
             <View style={styles.metricValueRow}>
-              <Text style={styles.metricBig}>{sessionCount}</Text>
-              <Text style={styles.metricSlash}>/ 12 prescribed</Text>
+              <Text style={styles.metricBig}>{sessionCount != null ? sessionCount : '--'}</Text>
+              {sessionCount != null ? (
+                <Text style={styles.metricSlash}>on record</Text>
+              ) : null}
             </View>
             <View style={styles.dotRow}>
               {Array.from({ length: 12 }).map((_, index) => (
@@ -198,17 +204,17 @@ export default function HomeScreen({ navigation }: Props) {
 
         <NavCard
           title="See all movements"
-          subtitle="Library of exercises in your plan"
+          subtitle="Browse the available exercise library"
           icon={<MovementsIcon />}
           seed={55}
           onPress={() => navigation.navigate('Movements')}
         />
         <NavCard
-          title="Reviewed by your doctor"
+          title="Clinical report"
           subtitle={
             latestReport?.summary
-              ? 'Latest note synced from your care team'
-              : '2 new notes from Dr. Adler'
+              ? 'Latest grounded session note available'
+              : 'No grounded report available yet'
           }
           icon={<DoctorIcon />}
           seed={61}
@@ -217,14 +223,14 @@ export default function HomeScreen({ navigation }: Props) {
         />
         <NavCard
           title="Return after session"
-          subtitle="Log how it felt · pain · notes"
+          subtitle="Log how it felt, pain, and notes"
           icon={<ReturnIcon />}
           seed={68}
           onPress={() => navigation.navigate('Return')}
         />
 
         <View style={styles.footer}>
-          <Text style={styles.footerText}>asking help is the first step ✱</Text>
+          <Text style={styles.footerText}>session metrics appear here after recorded visits</Text>
         </View>
       </ScrollView>
     </View>
@@ -337,7 +343,8 @@ const styles = StyleSheet.create({
   },
   playIcon: {
     color: COLORS.paper,
-    fontSize: 14,
+    fontSize: 18,
+    marginTop: -2,
     marginLeft: 1,
   },
   ctaMeta: {
@@ -345,21 +352,6 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.hand,
     fontSize: 14,
     color: 'rgba(243,236,219,0.85)',
-  },
-  streakBadge: {
-    position: 'absolute',
-    top: -8,
-    right: 8,
-    transform: [{ rotate: '8deg' }],
-    backgroundColor: 'rgba(243,236,219,0.95)',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 2,
-  },
-  streakText: {
-    fontFamily: FONTS.display,
-    fontSize: 18,
-    color: COLORS.accent,
   },
   metricsGrid: {
     flexDirection: 'row',
@@ -451,5 +443,6 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.hand,
     fontSize: 13,
     color: COLORS.inkFaint,
+    textAlign: 'center',
   },
 });

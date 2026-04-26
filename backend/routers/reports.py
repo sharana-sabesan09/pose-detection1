@@ -37,6 +37,8 @@ async def get_latest_report(
                 session_highlights=metrics.get("session_highlights", []),
                 recommendations=metrics.get("recommendations", []),
                 evidence_map=metrics.get("evidence_map", {}),
+                reportability=metrics.get("reportability", "unknown"),
+                data_coverage=latest_artifact.data_coverage_json or {},
             )
 
     result = await db.execute(
@@ -58,6 +60,8 @@ async def get_latest_report(
         session_highlights=[],
         recommendations=[],
         evidence_map={},
+        reportability="unknown",
+        data_coverage={},
     )
 
 

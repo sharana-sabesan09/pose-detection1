@@ -22,6 +22,20 @@ logger = logging.getLogger(__name__)
 async def run_progress(patient_id: str, db: AsyncSession) -> ProgressOutput:
     # ── Layer 1: Build structured patient timeline ────────────────────────────
     timeline = await build_patient_timeline(patient_id, db)
+    if len(timeline.sessions) < 3:
+        return ProgressOutput(
+            longitudinal_report=(
+                "Insufficient longitudinal data to generate a grounded progress report. "
+                "At least 3 recorded sessions are required before trend analysis is shown."
+            ),
+            overall_trend="insufficient_data",
+            milestones_reached=[],
+            next_goals=[],
+            evidence_citations={},
+            data_warnings=[
+                f"Only {len(timeline.sessions)} recorded session(s) available; at least 3 are required.",
+            ],
+        )
 
     # ── Layer 2: Compute salience deterministically ───────────────────────────
     salience = compute_salience(timeline)
@@ -96,6 +110,7 @@ Output only valid JSON.""",
         end = raw.rfind("}") + 1
         data = json.loads(raw[start:end])
 
+    data.setdefault("data_warnings", salience.data_warnings)
     output = ProgressOutput(**data)
 
     await hipaa_wrap(
@@ -166,6 +181,7 @@ Output only valid JSON.""",
                 "milestones_reached": output.milestones_reached,
                 "next_goals": output.next_goals,
                 "evidence_citations": output.evidence_citations,
+                "data_warnings": output.data_warnings,
                 "salient_session_ids": salience.salient_session_ids,
                 "metrics_used": salience.salient_metrics,
             }

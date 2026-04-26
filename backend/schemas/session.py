@@ -54,6 +54,8 @@ class ReporterOutput(BaseModel):
     session_highlights: list[str]
     recommendations: list[str]
     evidence_map: dict = {}
+    reportability: str = "unknown"
+    data_coverage: dict = {}
 
 
 class ProgressOutput(BaseModel):
@@ -62,6 +64,7 @@ class ProgressOutput(BaseModel):
     milestones_reached: list[str]
     next_goals: list[str]
     evidence_citations: dict = {}
+    data_warnings: list[str] = []
 
 
 class ExerciseReporterOutput(BaseModel):

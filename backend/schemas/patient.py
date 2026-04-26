@@ -54,5 +54,7 @@ class PatientSessionOverview(BaseModel):
 
 class PatientOverviewResponse(PatientResponse):
     session_count: int
+    pt_session_count: int = 0
+    exercise_visit_count: int = 0
     accumulated_scores: AccumulatedScoresResponse | None
     recent_sessions: list[PatientSessionOverview]

@@ -113,6 +113,12 @@ Output only valid JSON."""
         session_highlights=data["session_highlights"],
         recommendations=data["recommendations"],
         evidence_map=evidence_map,
+        reportability="reportable",
+        data_coverage={
+            "required_fields_present": True,
+            "missing_fields": [],
+            "notes": [] if reinjury_risk.data_sufficient else ["reinjury trend data insufficient"],
+        },
     )
 
     await hipaa_wrap(

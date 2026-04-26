@@ -90,6 +90,8 @@ class ReporterResponse(Model):
     session_highlights: list
     recommendations: list
     evidence_map: dict = {}
+    reportability: str = "unknown"
+    data_coverage: dict = {}
     error: Optional[str] = None
 
 
@@ -104,6 +106,7 @@ class ProgressResponse(Model):
     milestones_reached: list
     next_goals: list
     evidence_citations: dict = {}
+    data_warnings: list = []
     error: Optional[str] = None
 
 
