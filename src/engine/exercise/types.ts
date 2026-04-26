@@ -174,6 +174,33 @@ export type ExerciseType =
   | 'rightLsd'
   | 'walking';
 
+/**
+ * Fixed calibration order: left squat → right squat → left lateral step-down →
+ * right lateral step-down. (UI: “lateral” = lateral step-down, `leftLsd` / `rightLsd`.)
+ * Any other prescribed moves (e.g. `walking`) are not reordered among themselves;
+ * they follow this block via {@link normalizeExerciseProgram}.
+ */
+const _calibrationOrderList: ExerciseType[] = [
+  'leftSls',
+  'rightSls',
+  'leftLsd',
+  'rightLsd',
+];
+
+/** @see normalizeExerciseProgram — fixed visit order for the four calibration moves. */
+export const CALIBRATION_EXERCISE_ORDER: readonly ExerciseType[] = _calibrationOrderList;
+
+const _calibrationExerciseSet = new Set<ExerciseType>(_calibrationOrderList);
+
+/** Puts the four calibration moves in {@link CALIBRATION_EXERCISE_ORDER}; keeps tail entries in original order. */
+export function normalizeExerciseProgram(program: ExerciseType[]): ExerciseType[] {
+  if (program.length === 0) return program;
+  const wanted = new Set(program);
+  const head = _calibrationOrderList.filter(e => wanted.has(e));
+  const tail = program.filter(e => !_calibrationExerciseSet.has(e));
+  return [...head, ...tail];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Session-level (FINAL OUTPUT)
 //

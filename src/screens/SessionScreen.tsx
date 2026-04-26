@@ -3,7 +3,8 @@
  *
  * NEW MULTI-EXERCISE FLOW (replaces single 60s recording):
  *
- *   On mount → load patient.curr_program (list of prescribed exercises).
+ *   On mount → load patient.curr_program (prescribed exercises; calibration
+ *   block normalized to leftSls → rightSls → leftLsd → rightLsd in patientInfo).
  *   User taps "Start Session" → run each exercise back-to-back:
  *
  *     For each exercise in curr_program:

@@ -2,7 +2,9 @@
  * src/engine/patientInfo.ts — PATIENT INFO LOADER
  *
  * The pipeline reads two things from the patient record:
- *   1. curr_program — list of (side+exercise) entries to run this session
+ *   1. curr_program — list of (side+exercise) entries to run this session.
+ *      The four calibration moves are normalized to product order on load:
+ *      leftSls → rightSls → leftLsd → rightLsd; then any tail (e.g. walking).
  *   2. injuredjoint — joint name (mediapipe-style) flagged for ROM tracking
  *
  * The other demographic fields stay aligned with backend/schemas/patient.py.
@@ -17,7 +19,7 @@
  * mechanical.
  */
 
-import { ExerciseType } from './exercise/types';
+import { ExerciseType, normalizeExerciseProgram } from './exercise/types';
 import patientData from '../data/patientInfo.json';
 
 export interface PatientInfo {
@@ -40,5 +42,9 @@ export interface PatientInfo {
 export async function loadPatientInfo(): Promise<PatientInfo> {
   // TODO: replace with `await fetch(BACKEND_URL + '/patients/' + id)` once the
   // backend route exists. The JSON shape already matches the response model.
-  return patientData as PatientInfo;
+  const raw = patientData as PatientInfo;
+  return {
+    ...raw,
+    curr_program: normalizeExerciseProgram(raw.curr_program),
+  };
 }
