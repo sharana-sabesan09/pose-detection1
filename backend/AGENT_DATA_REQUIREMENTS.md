@@ -25,52 +25,54 @@ Needed fields:
 - age
 - sex / gender as collected by product policy
 - height / weight / BMI
-- primary condition / diagnosis
-- injury region
-- injury side
-- rehab phase
-- contraindications / restrictions
-- assistive device use
-- fall history
-- medication risk factors if collected
-- baseline pain
-- baseline function
-- patient goals
-- clinician goals
+- primary condition / diagnosis <!-- documentation -->
+- injury region <!-- voice input -->
+- injury side <!-- voice input -->
+- ROM restrictions <!-- What patient cant move -->
+- fall history <!-- provided by patient -->
+- baseline pain <!-- user input -->
+- patient goals 
+- clinician goals  
 
 ## 2. Session context
 
 Needed fields:
 - `session_id`
 - `patient_id`
-- session type (`pt`, `exercise`, `followup`, etc.)
-- exercise / task label
-- affected side
+- affected side 
 - start / end timestamp
-- clinician plan
+- clinician plan <!-- PT Documentation Intake -->
 - self-reported symptoms before session
 - self-reported symptoms after session
-- adherence / completion status
+- 
 
 ## 3. Measurement layer
 
 Needed fields:
-- raw pose / frame signals or derived metrics
 - rep counts
 - rep timing
-- per-rep side
-- per-rep confidence
-- signal quality / dropout rate
-- threshold breaches
-- deterministic scores
+- Left SLS  Features <!-- json -->
+- Right SLS Features <!-- json -->
+- Left SLS Errors(Threshold breaches) <!-- Voice input pose correction -->
+- Right SLS Errors (Threshold breaches) <!-- Voice input pose correction -->
+- Right LSD Raw Features  <!-- CSV -->
+- Left LSD Raw Features  <!-- CSV -->
+- Right LSD Errors <!-- Voice input pose correction -->
+- Left LSD Errors <!-- Voice input pose correction -->
+- SLS Raw Features & Errors Documentation
+- LSD Raw Features & Errors Documentation
+- adherence / completion status <!-- subtract overlay from user -->
+- SLS injured joint ROM score
+- LSD injured joint ROM score
 
 ## 4. Longitudinal layer
 
 Needed fields:
 - prior sessions used
-- session-to-session deltas
+- session-to-session risk deltas
+- session-to-session feature deltas
+- session-to-session injured joint deltas
 - rolling averages / trends
-- intervention changes
 - goal progress
 - milestones reached
 
@@ -84,24 +86,33 @@ Needed fields:
 
 Required:
 - `patient_id`
-- diagnosis / problem list
-- injury region
-- injury side
-- rehab phase
-- explicit pain inputs by region
-- explicit patient goals
-- clinician plan / clinician goals
-- restrictions / contraindications
+- age
+- sex / gender as collected by product policy
+- height / weight / BMI
+- primary condition / diagnosis <!-- documentation -->
+- injury region <!-- voice input -->
+- injury side <!-- voice input -->
+- ROM restrictions <!-- What patient cant move -->
+- fall history <!-- provided by patient -->
+- baseline pain <!-- user input -->
+- patient goals 
+- clinician goals
 
 Optional:
 - free-text notes
 - prior imaging / surgery summary
-- baseline PROM scores
 
 ### What should be computed before the agent
 
 Deterministic:
-- pain normalization
+- Left SLS  Features <!-- json -->
+- Right SLS Features <!-- json -->
+- Left SLS Errors(Threshold breaches) <!-- Voice input pose correction -->
+- Right SLS Errors (Threshold breaches) <!-- Voice input pose correction -->
+- Right LSD Raw Features  <!-- CSV -->
+- Left LSD Raw Features  <!-- CSV -->
+- Right LSD Errors <!-- Voice input pose correction -->
+- Left LSD Errors <!-- Voice input pose correction -->
 - mapping from selected body region to joint codes
 - baseline risk flags from intake checklist
 
