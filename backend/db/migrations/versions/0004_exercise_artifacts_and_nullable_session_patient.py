@@ -15,7 +15,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.alter_column("sessions", "patient_id", existing_type=sa.String(36), nullable=True)
+    with op.batch_alter_table("sessions") as batch_op:
+        batch_op.alter_column("patient_id", existing_type=sa.String(36), nullable=True)
     op.add_column("exercise_sessions", sa.Column("reps_csv", sa.Text(), nullable=True))
     op.add_column("exercise_sessions", sa.Column("frame_features_csv", sa.Text(), nullable=True))
 
@@ -23,4 +24,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_column("exercise_sessions", "frame_features_csv")
     op.drop_column("exercise_sessions", "reps_csv")
-    op.alter_column("sessions", "patient_id", existing_type=sa.String(36), nullable=False)
+    with op.batch_alter_table("sessions") as batch_op:
+        batch_op.alter_column("patient_id", existing_type=sa.String(36), nullable=False)

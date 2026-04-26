@@ -15,12 +15,22 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("patients", sa.Column("metadata_json", sa.JSON(), nullable=True))
-    op.add_column("patients", sa.Column("updated_at", sa.DateTime(), nullable=True))
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_columns = {column["name"] for column in inspector.get_columns("patients")}
+
+    if "metadata_json" not in existing_columns:
+        op.add_column("patients", sa.Column("metadata_json", sa.JSON(), nullable=True))
+
+    if "updated_at" not in existing_columns:
+        op.add_column("patients", sa.Column("updated_at", sa.DateTime(), nullable=True))
+
     op.execute("UPDATE patients SET updated_at = created_at WHERE updated_at IS NULL")
-    op.alter_column("patients", "updated_at", existing_type=sa.DateTime(), nullable=False)
+    with op.batch_alter_table("patients") as batch_op:
+        batch_op.alter_column("updated_at", existing_type=sa.DateTime(), nullable=False)
 
 
 def downgrade() -> None:
-    op.drop_column("patients", "updated_at")
+    with op.batch_alter_table("patients") as batch_op:
+        batch_op.drop_column("updated_at")
     op.drop_column("patients", "metadata_json")
