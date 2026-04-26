@@ -283,6 +283,7 @@ export default function SessionScreen() {
       );
     };
 
+    runTick();
     const id = setInterval(runTick, 10000);
     return () => {
       clearInterval(id);

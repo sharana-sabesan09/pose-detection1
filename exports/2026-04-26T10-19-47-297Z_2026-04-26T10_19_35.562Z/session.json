@@ -1,0 +1,14 @@
+{
+  "sessionId": "2026-04-26T10:19:35.562Z",
+  "startedAtMs": 1777198775562,
+  "endedAtMs": 1777198819338,
+  "durationMs": 43776,
+  "patient": {
+    "patientId": "pt-1777184386614-2yhig2b0",
+    "injuredJoint": {
+      "name": "right_knee",
+      "romByExercise": {}
+    }
+  },
+  "exercises": []
+}

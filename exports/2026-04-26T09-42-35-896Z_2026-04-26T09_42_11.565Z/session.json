@@ -1,0 +1,143 @@
+{
+  "sessionId": "2026-04-26T09:42:11.565Z",
+  "startedAtMs": 1777196531565,
+  "endedAtMs": 1777196587370,
+  "durationMs": 55805,
+  "patient": {
+    "patientId": "pt-1777184386614-2yhig2b0",
+    "injuredJoint": {
+      "name": "right_knee",
+      "romByExercise": {
+        "leftSls": null,
+        "rightSls": null,
+        "leftLsd": null,
+        "rightLsd": null
+      }
+    }
+  },
+  "exercises": [
+    {
+      "exercise": "leftSls",
+      "visitId": "2026-04-26T09:42:11.565Z",
+      "injuredJointRom": {
+        "joint": "right_knee",
+        "rom": null
+      },
+      "startedAtMs": 1777196535116,
+      "endedAtMs": 1777196540064,
+      "durationMs": 4948,
+      "numReps": 0,
+      "summary": {
+        "exercise": "leftSls",
+        "reps": [],
+        "summary": {
+          "numReps": 0,
+          "avgDepth": null,
+          "minDepth": null,
+          "avgFppa": null,
+          "maxFppa": null,
+          "consistency": null,
+          "overallRating": "poor"
+        }
+      }
+    },
+    {
+      "exercise": "rightSls",
+      "visitId": "2026-04-26T09:42:11.565Z",
+      "injuredJointRom": {
+        "joint": "right_knee",
+        "rom": null
+      },
+      "startedAtMs": 1777196541598,
+      "endedAtMs": 1777196548176,
+      "durationMs": 6578,
+      "numReps": 0,
+      "summary": {
+        "exercise": "rightSls",
+        "reps": [],
+        "summary": {
+          "numReps": 0,
+          "avgDepth": null,
+          "minDepth": null,
+          "avgFppa": null,
+          "maxFppa": null,
+          "consistency": null,
+          "overallRating": "poor"
+        }
+      }
+    },
+    {
+      "exercise": "leftLsd",
+      "visitId": "2026-04-26T09:42:11.565Z",
+      "injuredJointRom": {
+        "joint": "right_knee",
+        "rom": null
+      },
+      "startedAtMs": 1777196549026,
+      "endedAtMs": 1777196556230,
+      "durationMs": 7204,
+      "numReps": 0,
+      "summary": {
+        "exercise": "leftLsd",
+        "reps": [],
+        "summary": {
+          "numReps": 0,
+          "avgDepth": null,
+          "minDepth": null,
+          "avgFppa": null,
+          "maxFppa": null,
+          "consistency": null,
+          "overallRating": "poor"
+        }
+      }
+    },
+    {
+      "exercise": "rightLsd",
+      "visitId": "2026-04-26T09:42:11.565Z",
+      "injuredJointRom": {
+        "joint": "right_knee",
+        "rom": null
+      },
+      "startedAtMs": 1777196558643,
+      "endedAtMs": 1777196568767,
+      "durationMs": 10124,
+      "numReps": 0,
+      "summary": {
+        "exercise": "rightLsd",
+        "reps": [],
+        "summary": {
+          "numReps": 0,
+          "avgDepth": null,
+          "minDepth": null,
+          "avgFppa": null,
+          "maxFppa": null,
+          "consistency": null,
+          "overallRating": "poor"
+        }
+      }
+    },
+    {
+      "exercise": "walking",
+      "visitId": "2026-04-26T09:42:11.565Z",
+      "injuredJointRom": null,
+      "startedAtMs": 1777196578863,
+      "endedAtMs": 1777196587367,
+      "durationMs": 8504,
+      "numReps": 0,
+      "summary": {
+        "exercise": "walking",
+        "reps": [],
+        "summary": {
+          "numReps": 0,
+          "avgDepth": null,
+          "minDepth": null,
+          "avgFppa": null,
+          "maxFppa": null,
+          "consistency": null,
+          "overallRating": "good",
+          "lateralSwayRange": 0.09109567105770111
+        }
+      }
+    }
+  ]
+}
