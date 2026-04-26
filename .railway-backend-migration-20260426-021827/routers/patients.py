@@ -1,7 +1,6 @@
-from datetime import datetime
+﻿from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,15 +20,6 @@ from schemas.patient import (
 router = APIRouter(prefix="/patients", tags=["patients"])
 
 
-class PatientListItem(BaseModel):
-    id: str
-    metadata: dict | None
-    session_count: int
-    last_session_at: datetime | None
-    fall_risk_avg: float | None
-    reinjury_risk_avg: float | None
-
-
 def _to_response(patient: Patient) -> PatientResponse:
     return PatientResponse(
         id=patient.id,
@@ -37,52 +27,6 @@ def _to_response(patient: Patient) -> PatientResponse:
         created_at=patient.created_at,
         updated_at=patient.updated_at,
     )
-
-
-@router.get("", response_model=list[PatientListItem])
-async def list_patients(
-    db: AsyncSession = Depends(get_db),
-    _user=Depends(require_jwt),
-):
-    patients_result = await db.execute(
-        select(Patient).order_by(Patient.updated_at.desc())
-    )
-    patients = patients_result.scalars().all()
-    if not patients:
-        return []
-
-    patient_ids = [p.id for p in patients]
-
-    session_counts: dict[str, int] = {}
-    last_sessions: dict[str, datetime] = {}
-    counts_result = await db.execute(
-        select(Session.patient_id, func.count(Session.id), func.max(Session.started_at))
-        .where(Session.patient_id.in_(patient_ids))
-        .group_by(Session.patient_id)
-    )
-    for pid, cnt, last in counts_result.all():
-        session_counts[pid] = cnt
-        if last:
-            last_sessions[pid] = last
-
-    accumulated: dict[str, AccumulatedScore] = {}
-    acc_result = await db.execute(
-        select(AccumulatedScore).where(AccumulatedScore.patient_id.in_(patient_ids))
-    )
-    for row in acc_result.scalars().all():
-        accumulated[row.patient_id] = row
-
-    return [
-        PatientListItem(
-            id=p.id,
-            metadata=p.metadata_json,
-            session_count=session_counts.get(p.id, 0),
-            last_session_at=last_sessions.get(p.id),
-            fall_risk_avg=accumulated[p.id].fall_risk_avg if p.id in accumulated else None,
-            reinjury_risk_avg=accumulated[p.id].reinjury_risk_avg if p.id in accumulated else None,
-        )
-        for p in patients
-    ]
 
 
 @router.put("/{patient_id}", response_model=PatientResponse)

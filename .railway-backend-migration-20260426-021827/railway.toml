@@ -1,0 +1,13 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+# Runs alembic migrations before traffic is cut over to the new instance.
+# If the migration fails, Railway aborts the deploy and keeps the previous
+# version live — no broken schema reaches production.
+releaseCommand = "uv run alembic upgrade head"
+startCommand = "uv run python run_agent.py"
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
